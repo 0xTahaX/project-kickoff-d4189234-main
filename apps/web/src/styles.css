@@ -1,0 +1,56 @@
+:root {
+  font-family: Vazirmatn, Tahoma, sans-serif;
+  color: #1b2420;
+  background: #f6f7f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --background: #f6f7f5;
+  --surface: #fff;
+  --text: #1b2420;
+  --muted: #6b766f;
+  --border: #e3e8e4;
+  --green: #1f8a5b;
+  --red: #c4453a;
+  --success-background: #e4f4ec;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.document {
+  width: min(100% - 32px, 760px);
+  margin: 32px auto;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e8eee9;
+    background: #111614;
+    --background: #111614;
+    --surface: #1a211e;
+    --text: #e8eee9;
+    --muted: #98a39c;
+    --border: #2b3430;
+    --green: #4cc790;
+    --red: #ee7b70;
+    --success-background: #16372a;
+  }
+}

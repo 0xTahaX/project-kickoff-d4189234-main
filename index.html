@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>دارا | مدیریت مالی</title>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <nav id="nav" aria-label="ناوبری اصلی"></nav>
+      <main id="m" aria-live="polite">
+        <section class="card">در حال بارگذاری داشبورد…</section>
+      </main>
+    </div>
+    <dialog id="dlg"></dialog>
+    <script>
+      window.DARA_USER_ID = "preview";
+      const loadApp = () => {
+        const app = document.createElement("script");
+        app.src = "app.js";
+        document.body.append(app);
+      };
+      const loadPhase5 = () => {
+        const phase5Core = document.createElement("script");
+        phase5Core.src = "phase5-core.js";
+        phase5Core.onerror = () => {
+          document.getElementById("m").innerHTML =
+            '<section class="card">بارگذاری هستهٔ حریم خصوصی و گزارش‌ها ناموفق بود.</section>';
+          loadApp();
+        };
+        phase5Core.onload = () => {
+          const phase5Ui = document.createElement("script");
+          phase5Ui.src = "phase5-ui.js";
+          phase5Ui.onerror = () => {
+            document.getElementById("m").innerHTML =
+              '<section class="card">بارگذاری رابط فاز پنجم ناموفق بود.</section>';
+            loadApp();
+          };
+          phase5Ui.onload = loadApp;
+          document.body.append(phase5Ui);
+        };
+        document.body.append(phase5Core);
+      };
+      const loadPhase4 = () => {
+        const phase4Core = document.createElement("script");
+        phase4Core.src = "phase4-core.js";
+        phase4Core.onerror = () => {
+          document.getElementById("m").innerHTML =
+            '<section class="card">بارگذاری ماژول بلاک‌چین و ژورنال ناموفق بود.</section>';
+          loadPhase5();
+        };
+        phase4Core.onload = () => {
+          const phase4Ui = document.createElement("script");
+          phase4Ui.src = "phase4-ui.js";
+          phase4Ui.onerror = () => {
+            document.getElementById("m").innerHTML =
+              '<section class="card">بارگذاری رابط بلاک‌چین و ژورنال ناموفق بود.</section>';
+            loadPhase5();
+          };
+          phase4Ui.onload = loadPhase5;
+          document.body.append(phase4Ui);
+        };
+        document.body.append(phase4Core);
+      };
+      const assetsCore = document.createElement("script");
+      assetsCore.src = "assets-core.js";
+      assetsCore.onerror = () => {
+        document.getElementById("m").innerHTML =
+          '<section class="card">بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید.</section>';
+      };
+      assetsCore.onload = () => {
+        const assetsUi = document.createElement("script");
+        assetsUi.src = "assets-ui.js";
+        assetsUi.onload = () => {
+          const marketsUi = document.createElement("script");
+          marketsUi.src = "markets-ui.js";
+          marketsUi.onload = loadPhase4;
+          marketsUi.onerror = loadPhase4;
+          document.body.append(marketsUi);
+        };
+        document.body.append(assetsUi);
+      };
+      document.body.append(assetsCore);
+    </script>
+  </body>
+</html>

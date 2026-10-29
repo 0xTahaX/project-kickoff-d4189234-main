@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountType {
+  CASH
+  BANK
+  SAVINGS
+  INVESTMENT
+}
+
+enum CategoryKind {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionKind {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+enum DebtKind {
+  OWED
+  OWED_TO_USER
+}
+
+enum RecurringFrequency {
+  WEEKLY
+  MONTHLY
+}
+
+enum RecurringKind {
+  INCOME
+  EXPENSE
+}
+
+// کدها به ISO 4217 محدود و دقت اعشاری هر ارز صریح نگهداری می‌شود.
+model Currency {
+  code             String             @id @db.Char(3)
+  minorUnits       Int                @map("minor_units") @db.SmallInt
+  users            User[]
+  accounts         Account[]
+  transactions     Transaction[]
+  budgets          Budget[]
+  savingsGoals     SavingsGoal[]
+  recurringPayments RecurringPayment[]
+  debts            Debt[]
+  assets           Asset[]
+
+  @@map("currencies")
+}
+
+// کاربر مالک مستقیم پروفایل، نشست‌ها و تمام داده‌های مالی است.
+model User {
+  id                 String              @id @default(uuid()) @db.Uuid
+  firstName          String              @map("first_name") @db.VarChar(50)
+  lastName           String              @default("") @map("last_name") @db.VarChar(50)
+  email              String              @unique @db.VarChar(254)
+  passwordHash       String              @map("password_hash") @db.VarChar(128)
+  passwordSalt       String              @map("password_salt") @db.VarChar(64)
+  preferredLanguage  String              @default("fa") @map("preferred_language") @db.Char(2)
+  primaryCurrency    String              @default("IRR") @map("primary_currency") @db.Char(3)
+  acceptedTermsAt    DateTime            @map("accepted_terms_at") @db.Timestamptz(6)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions           Session[]
+  passwordResets     PasswordReset[]
+  currency           Currency            @relation(fields: [primaryCurrency], references: [code], onDelete: Restrict)
+  accounts           Account[]
+  categories         Category[]
+  transactions       Transaction[]
+  budgets            Budget[]
+  savingsGoals       SavingsGoal[]
+  recurringPayments  RecurringPayment[]
+  debts              Debt[]
+  assets             Asset[]
+
+  @@map("users")
+}
+
+// مقدار خام کوکی هیچ‌وقت ذخیره نمی‌شود؛ فقط SHA-256 آن در این جدول قرار می‌گیرد.
+model Session {
+  id         String   @id @default(uuid()) @db.Uuid
+  tokenHash  String   @unique @map("token_hash") @db.Char(64)
+  userId     String   @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  userAgent  String   @default("") @map("user_agent") @db.VarChar(300)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+// توکن بازیابی نیز به شکل hash ذخیره و پس از مصرف حذف می‌شود.
+model PasswordReset {
+  tokenHash String   @id @map("token_hash") @db.Char(64)
+  userId    String   @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_resets")
+}
+
+// حساب بانکی/نقدی به کاربر تعلق دارد؛ مبلغ‌ها اعشاری دقیق نگهداری می‌شوند.
+model Account {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  name           String        @db.VarChar(100)
+  type           AccountType
+  openingBalance Decimal       @default(0) @map("opening_balance") @db.Decimal(20, 6)
+  currency       String        @default("IRR") @db.Char(3)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo   Currency      @relation(fields: [currency], references: [code], onDelete: Restrict)
+  transactions   Transaction[] @relation("TransactionAccount")
+  transfersIn    Transaction[] @relation("TransactionTransferTarget")
+  recurring      RecurringPayment[]
+
+  @@unique([id, userId])
+  @@index([userId, createdAt])
+  @@map("accounts")
+}
+
+// دسته‌ها مالک دارند تا دادهٔ یک کاربر به کاربر دیگری نشت نکند.
+model Category {
+  id           String        @id @default(uuid()) @db.Uuid
+  userId       String        @map("user_id") @db.Uuid
+  name         String        @db.VarChar(80)
+  kind         CategoryKind
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+  recurring    RecurringPayment[]
+
+  @@unique([id, userId])
+  @@unique([userId, name, kind])
+  @@map("categories")
+}
+
+// رابطه‌های مرکب userId مانع اتصال تراکنش به حساب کاربر دیگری می‌شوند.
+model Transaction {
+  id            String          @id @default(uuid()) @db.Uuid
+  userId        String          @map("user_id") @db.Uuid
+  accountId     String          @map("account_id") @db.Uuid
+  targetId      String?         @map("target_id") @db.Uuid
+  categoryId    String?         @map("category_id") @db.Uuid
+  kind          TransactionKind
+  amount        Decimal         @db.Decimal(20, 6)
+  currency      String          @db.Char(3)
+  occurredAt    DateTime        @map("occurred_at") @db.Timestamptz(6)
+  description   String          @default("") @db.VarChar(200)
+  note          String          @default("") @db.VarChar(1000)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo  Currency        @relation(fields: [currency], references: [code], onDelete: Restrict)
+  account       Account         @relation("TransactionAccount", fields: [accountId, userId], references: [id, userId], onDelete: Cascade)
+  target        Account?        @relation("TransactionTransferTarget", fields: [targetId, userId], references: [id, userId], onDelete: Restrict)
+  category      Category?       @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+
+  @@index([userId, occurredAt])
+  @@index([userId, categoryId, occurredAt])
+  @@map("transactions")
+}
+
+model Budget {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  categoryId String   @map("category_id") @db.Uuid
+  amount     Decimal  @db.Decimal(20, 6)
+  currency   String   @db.Char(3)
+  month      DateTime @db.Date
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo Currency @relation(fields: [currency], references: [code], onDelete: Restrict)
+  category   Category @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month])
+  @@map("budgets")
+}
+
+model SavingsGoal {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  name      String    @db.VarChar(100)
+  target    Decimal   @db.Decimal(20, 6)
+  saved     Decimal   @default(0) @db.Decimal(20, 6)
+  currency  String    @db.Char(3)
+  targetAt  DateTime? @map("target_at") @db.Date
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo Currency @relation(fields: [currency], references: [code], onDelete: Restrict)
+
+  @@index([userId, targetAt])
+  @@map("savings_goals")
+}
+
+model RecurringPayment {
+  id          String      @id @default(uuid()) @db.Uuid
+  userId      String      @map("user_id") @db.Uuid
+  accountId   String      @map("account_id") @db.Uuid
+  categoryId  String?     @map("category_id") @db.Uuid
+  name        String      @db.VarChar(100)
+  kind        RecurringKind
+  amount      Decimal     @db.Decimal(20, 6)
+  currency    String      @db.Char(3)
+  frequency   RecurringFrequency
+  nextDueAt   DateTime    @map("next_due_at") @db.Date
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account     Account     @relation(fields: [accountId, userId], references: [id, userId], onDelete: Cascade)
+  category    Category?   @relation(fields: [categoryId, userId], references: [id, userId], onDelete: Restrict)
+  currencyInfo Currency    @relation(fields: [currency], references: [code], onDelete: Restrict)
+
+  @@index([userId, nextDueAt])
+  @@map("recurring_payments")
+}
+
+model Debt {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  name        String   @db.VarChar(100)
+  kind        DebtKind
+  principal   Decimal  @db.Decimal(20, 6)
+  outstanding Decimal  @db.Decimal(20, 6)
+  currency    String   @db.Char(3)
+  dueAt       DateTime? @map("due_at") @db.Date
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo Currency @relation(fields: [currency], references: [code], onDelete: Restrict)
+
+  @@index([userId, dueAt])
+  @@map("debts")
+}
+
+model Asset {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  name        String   @db.VarChar(100)
+  quantity    Decimal  @db.Decimal(24, 8)
+  unitValue   Decimal  @map("unit_value") @db.Decimal(20, 6)
+  currency    String   @db.Char(3)
+  valuedAt    DateTime @map("valued_at") @db.Timestamptz(6)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyInfo Currency @relation(fields: [currency], references: [code], onDelete: Restrict)
+
+  @@index([userId, valuedAt])
+  @@map("assets")
+}

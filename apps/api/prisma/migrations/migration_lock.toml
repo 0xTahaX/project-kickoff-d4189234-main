@@ -1,0 +1,2 @@
+# Prisma migration provider is pinned to the intended production database.
+provider = "postgresql"
