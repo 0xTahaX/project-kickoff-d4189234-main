@@ -3,6 +3,7 @@ import { readConfig } from "./config/env.js";
 import { createDatabaseClient } from "./database/client.js";
 import { PrismaAuthRepository } from "./database/prisma-auth.repository.js";
 import { PrismaFinanceRepository } from "./finance/finance.repository.js";
+import { createTransport } from "nodemailer";
 
 // نقطهٔ ورود تنها جای ساخت کلاینت دیتابیس، SMTP و listener است.
 async function start(): Promise<void> {
@@ -15,10 +16,23 @@ async function start(): Promise<void> {
   await prisma.$connect();
   const repository = new PrismaAuthRepository(prisma);
   await repository.deleteExpired(new Date());
+  const mailer =
+    config.smtpHost && config.smtpFrom
+      ? createTransport({
+          host: config.smtpHost,
+          port: config.smtpPort,
+          secure: config.smtpSecure,
+          ...(config.smtpUser && config.smtpPassword
+            ? { auth: { user: config.smtpUser, pass: config.smtpPassword } }
+            : {}),
+        })
+      : null;
+  if (config.nodeEnv === "production" && !mailer)
+    throw new Error("SMTP_HOST و SMTP_FROM برای احراز ایمیل در production الزامی هستند.");
 
   const app = createApp({
     config,
-    auth: { repository, appUrl: config.appUrl, mailer: null, mailFrom: config.smtpFrom },
+    auth: { repository, appUrl: config.appUrl, mailer, mailFrom: config.smtpFrom },
     finance: new PrismaFinanceRepository(prisma),
     databaseHealth: async () => {
       await prisma.$queryRaw`SELECT NOW()`;

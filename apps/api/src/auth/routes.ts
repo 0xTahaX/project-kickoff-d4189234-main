@@ -12,7 +12,9 @@ import {
   loginSchema,
   profileSchema,
   registerSchema,
+  resendVerificationSchema,
   resetPasswordSchema,
+  verifyEmailSchema,
 } from "./schemas.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { hashToken, createOpaqueToken } from "./tokens.js";
@@ -37,6 +39,7 @@ export interface AuthRouteOptions {
 const SHORT_SESSION_MS = 12 * 60 * 60 * 1000;
 const REMEMBER_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const RESET_TOKEN_MS = 60 * 60 * 1000;
+const VERIFICATION_TOKEN_MS = 24 * 60 * 60 * 1000;
 
 // محدودیت‌ها برای یک سرور تک‌نمونه‌ای هستند؛ تولید چندنمونه‌ای به store مشترک نیاز دارد.
 function authRateLimit(limit: number, windowMs: number) {
@@ -60,6 +63,7 @@ function publicUser(user: User) {
     first_name: user.firstName,
     last_name: user.lastName,
     email: user.email,
+    email_verified: user.emailVerifiedAt !== null,
     preferred_language: user.preferredLanguage,
     primary_currency: user.primaryCurrency,
     created_at: user.createdAt.toISOString(),
@@ -106,6 +110,12 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     authRateLimit(10, 60 * 60 * 1000),
     validateBody(registerSchema),
     async (request, response) => {
+      if (!mailer || !mailFrom)
+        throw new ApiError(
+          503,
+          "EMAIL_NOT_CONFIGURED",
+          "ارسال ایمیل تأیید در تنظیمات سرور فعال نشده است.",
+        );
       const body = request.body as ReturnType<typeof registerSchema.parse>;
       const credential = await hashPassword(body.password);
       const now = new Date();
@@ -117,7 +127,48 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
         ...credential,
         acceptedTermsAt: now,
       });
-      response.status(201).json({ user: publicUser(user) });
+      await sendVerificationEmail(repository, mailer, mailFrom, config.appUrl, user);
+      response.status(201).json({
+        message: "حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید.",
+      });
+    },
+  );
+
+  router.post(
+    "/verify-email",
+    authRateLimit(20, 60 * 60 * 1000),
+    validateBody(verifyEmailSchema),
+    async (request, response) => {
+      const { token } = request.body as ReturnType<typeof verifyEmailSchema.parse>;
+      const user = await repository.consumeEmailVerification(hashToken(token), new Date());
+      if (!user)
+        throw new ApiError(
+          400,
+          "INVALID_VERIFICATION_TOKEN",
+          "لینک تأیید معتبر نیست یا زمان آن گذشته است.",
+        );
+      response.json({ message: "ایمیل تأیید شد. اکنون می‌توانید وارد شوید." });
+    },
+  );
+
+  router.post(
+    "/resend-verification",
+    authRateLimit(5, 60 * 60 * 1000),
+    validateBody(resendVerificationSchema),
+    async (request, response) => {
+      if (!mailer || !mailFrom)
+        throw new ApiError(
+          503,
+          "EMAIL_NOT_CONFIGURED",
+          "ارسال ایمیل تأیید در تنظیمات سرور فعال نشده است.",
+        );
+      const { email } = request.body as ReturnType<typeof resendVerificationSchema.parse>;
+      const user = await repository.findUserByEmail(email);
+      if (user && !user.emailVerifiedAt)
+        await sendVerificationEmail(repository, mailer, mailFrom, config.appUrl, user);
+      response.json({
+        message: "اگر حساب تأییدنشده‌ای با این ایمیل وجود داشته باشد، لینک تازه ارسال می‌شود.",
+      });
     },
   );
 
@@ -130,6 +181,12 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
       const user = await repository.findUserByEmail(body.email);
       if (!user || !(await verifyPassword(body.password, user)))
         throw new ApiError(401, "INVALID_CREDENTIALS", "ایمیل یا گذرواژه درست نیست.");
+      if (!user.emailVerifiedAt)
+        throw new ApiError(
+          403,
+          "EMAIL_NOT_VERIFIED",
+          "برای ورود ابتدا ایمیل خود را تأیید کنید.",
+        );
 
       if (request.authSession) await repository.deleteSession(request.authSession.tokenHash);
       const token = createOpaqueToken();
@@ -167,7 +224,7 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
           user.id,
           new Date(Date.now() + RESET_TOKEN_MS),
         );
-        const link = `${config.appUrl}/reset-password?token=${encodeURIComponent(token)}`;
+        const link = `${config.appUrl}/legacy/index.html?reset=${encodeURIComponent(token)}`;
         try {
           await mailer.sendMail({
             from: mailFrom,
@@ -176,9 +233,13 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
             text: `برای تعیین گذرواژهٔ جدید، این لینک را تا یک ساعت آینده باز کنید:\n${link}`,
             html: `<p>برای تعیین گذرواژهٔ جدید، لینک زیر را تا یک ساعت آینده باز کنید:</p><p><a href="${link}">بازیابی گذرواژه</a></p>`,
           });
-        } catch (error) {
+        } catch {
           await repository.deletePasswordReset(hashToken(token));
-          throw error;
+          throw new ApiError(
+            502,
+            "EMAIL_DELIVERY_FAILED",
+            "ارسال ایمیل بازیابی انجام نشد. کمی بعد دوباره تلاش کنید.",
+          );
         }
       }
       response.json({
@@ -247,6 +308,39 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
   return router;
 }
 
+async function sendVerificationEmail(
+  repository: AuthRepository,
+  mailer: Mailer,
+  mailFrom: string,
+  appUrl: string,
+  user: User,
+): Promise<void> {
+  const token = createOpaqueToken();
+  const tokenHash = hashToken(token);
+  await repository.createEmailVerification(
+    tokenHash,
+    user.id,
+    new Date(Date.now() + VERIFICATION_TOKEN_MS),
+  );
+  const link = `${appUrl}/legacy/index.html?verify=${encodeURIComponent(token)}`;
+  try {
+    await mailer.sendMail({
+      from: mailFrom,
+      to: user.email,
+      subject: "تأیید ایمیل حساب دارا",
+      text: `برای فعال‌کردن حساب دارا، این لینک را تا ۲۴ ساعت آینده باز کنید:\n${link}`,
+      html: `<p>برای فعال‌کردن حساب دارا، لینک زیر را تا ۲۴ ساعت آینده باز کنید:</p><p><a href="${link}">تأیید ایمیل</a></p>`,
+    });
+  } catch {
+    await repository.deleteEmailVerification(tokenHash);
+    throw new ApiError(
+      502,
+      "EMAIL_DELIVERY_FAILED",
+      "حساب در انتظار تأیید ساخته شد، اما ایمیل ارسال نشد. از ارسال دوبارهٔ لینک استفاده کنید.",
+    );
+  }
+}
+
 export function createProfileRouter(
   repository: AuthRepository,
   secureCookie: boolean,
@@ -267,7 +361,6 @@ export function createProfileRouter(
       const update: ProfileUpdate = {};
       if (body.first_name !== undefined) update.firstName = body.first_name;
       if (body.last_name !== undefined) update.lastName = body.last_name;
-      if (body.email !== undefined) update.email = body.email;
       if (body.preferred_language !== undefined)
         update.preferredLanguage = body.preferred_language;
       if (body.primary_currency !== undefined) update.primaryCurrency = body.primary_currency;

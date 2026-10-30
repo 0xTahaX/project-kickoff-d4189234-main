@@ -57,7 +57,7 @@ export function createApp(dependencies: AppDependencies): Express {
     });
     next();
   });
-  app.use(express.json({ limit: "20kb", strict: true }));
+  app.use(express.json({ limit: "1mb", strict: true }));
 
   // مبدأ مجاز یا WEB_ORIGIN است یا همان میزبانی که صفحه از آن بارگذاری شده (پیش‌نمایش پشت پراکسی).
   const isAllowedOrigin = (origin: string, host: string | undefined) => {

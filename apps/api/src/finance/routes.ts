@@ -1,9 +1,17 @@
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
+import type { Prisma } from "../generated/prisma/client.js";
 import { requireUser } from "../auth/middleware.js";
 import { ApiError } from "../http/errors.js";
 import { validateBody } from "../http/request-validation.js";
-import type { FinanceStore, SaveTransactionInput } from "./finance.repository.js";
+import {
+  WORKSPACE_KEYS,
+  type FinanceStore,
+  type SaveTransactionInput,
+  type SaveTransactionsInput,
+  type WorkspaceKey,
+} from "./finance.repository.js";
 
 const uuid = z.string().uuid("شناسه معتبر نیست.");
 const money = z
@@ -16,6 +24,23 @@ const date = z
     const parsed = new Date(`${value}T00:00:00Z`);
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   }, "تاریخ معتبر نیست.");
+const workspaceData = z
+  .json()
+  .refine((value) => typeof value === "object" && value !== null, "ساختار داده معتبر نیست.");
+const workspaceEntry = z.object({ data: workspaceData }).strict();
+const workspaceLimit = 512 * 1024;
+const workspaceRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
+const transactionImportRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+});
 
 const accountSchema = z
   .object({
@@ -26,30 +51,33 @@ const accountSchema = z
   })
   .strict();
 
+const categorySchema = z
+  .object({
+    id: uuid,
+    name: z.string().trim().min(1).max(80),
+    kind: z.enum(["INCOME", "EXPENSE"]),
+  })
+  .strict();
+
+const transactionSchema = z
+  .object({
+    id: uuid,
+    kind: z.enum(["INCOME", "EXPENSE", "TRANSFER"]),
+    amount: money.refine((value) => Number(value) > 0, "مبلغ باید بیشتر از صفر باشد."),
+    occurred_on: date,
+    account_id: uuid,
+    target_id: uuid.nullable(),
+    category_id: uuid.nullable(),
+    description: z.string().trim().max(200).default(""),
+    note: z.string().trim().max(1000).default(""),
+  })
+  .strict();
+
 export const saveTransactionSchema = z
   .object({
-    transaction: z
-      .object({
-        id: uuid,
-        kind: z.enum(["INCOME", "EXPENSE", "TRANSFER"]),
-        amount: money.refine((value) => Number(value) > 0, "مبلغ باید بیشتر از صفر باشد."),
-        occurred_on: date,
-        account_id: uuid,
-        target_id: uuid.nullable(),
-        category_id: uuid.nullable(),
-        description: z.string().trim().max(200).default(""),
-        note: z.string().trim().max(1000).default(""),
-      })
-      .strict(),
+    transaction: transactionSchema,
     accounts: z.array(accountSchema).min(1).max(2),
-    category: z
-      .object({
-        id: uuid,
-        name: z.string().trim().min(1).max(80),
-        kind: z.enum(["INCOME", "EXPENSE"]),
-      })
-      .strict()
-      .nullable(),
+    category: categorySchema.nullable(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -69,6 +97,40 @@ export const saveTransactionSchema = z
       fail("اطلاعات حساب تراکنش ارسال نشده است.");
   });
 
+export const importTransactionsSchema = z
+  .object({
+    accounts: z.array(accountSchema).min(1).max(500),
+    categories: z.array(categorySchema).max(500),
+    transactions: z.array(transactionSchema).min(1).max(5_000),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const accounts = new Map(value.accounts.map((account) => [account.id, account]));
+    const categories = new Map(value.categories.map((category) => [category.id, category]));
+    for (const [index, transaction] of value.transactions.entries()) {
+      const relatedAccounts = [
+        accounts.get(transaction.account_id),
+        transaction.target_id ? accounts.get(transaction.target_id) : undefined,
+      ].filter((account) => account !== undefined);
+      const category = transaction.category_id
+        ? categories.get(transaction.category_id) ?? null
+        : null;
+      const parsed = saveTransactionSchema.safeParse({
+        transaction,
+        accounts: relatedAccounts,
+        category,
+      });
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) {
+          context.addIssue({
+            ...issue,
+            path: ["transactions", index, ...issue.path],
+          });
+        }
+      }
+    }
+  });
+
 // همهٔ مسیرهای دفتر مالی فقط برای کاربر واردشده و فقط روی دادهٔ خود او کار می‌کنند.
 export function createFinanceRouter(store: FinanceStore): Router {
   const router = Router();
@@ -78,6 +140,48 @@ export function createFinanceRouter(store: FinanceStore): Router {
     response.set("Cache-Control", "no-store");
     response.json(await store.getLedger(request.authUser!.id));
   });
+
+  router.get("/workspace", async (request, response) => {
+    response.set("Cache-Control", "no-store");
+    response.json(await store.getWorkspace(request.authUser!.id));
+  });
+
+  router.put(
+    "/workspace/:key",
+    workspaceRateLimit,
+    validateBody(workspaceEntry),
+    async (request, response) => {
+      if (!WORKSPACE_KEYS.includes(request.params.key as WorkspaceKey))
+        throw new ApiError(404, "NOT_FOUND", "بخش ذخیره‌سازی پیدا نشد.");
+      const { data } = request.body as z.infer<typeof workspaceEntry>;
+      if (Buffer.byteLength(JSON.stringify(data), "utf8") > workspaceLimit)
+        throw new ApiError(413, "WORKSPACE_TOO_LARGE", "حجم داده از حد مجاز بیشتر است.");
+      await store.saveWorkspace(
+        request.authUser!.id,
+        request.params.key as WorkspaceKey,
+        data as Prisma.InputJsonValue,
+      );
+      response.status(204).end();
+    },
+  );
+
+  router.delete("/workspace/:key", workspaceRateLimit, async (request, response) => {
+    if (!WORKSPACE_KEYS.includes(request.params.key as WorkspaceKey))
+      throw new ApiError(404, "NOT_FOUND", "بخش ذخیره‌سازی پیدا نشد.");
+    await store.deleteWorkspace(request.authUser!.id, request.params.key as WorkspaceKey);
+    response.status(204).end();
+  });
+
+  router.post(
+    "/transactions/import",
+    transactionImportRateLimit,
+    validateBody(importTransactionsSchema),
+    async (request, response) => {
+      const body = request.body as SaveTransactionsInput;
+      await store.saveTransactions(request.authUser!.id, body);
+      response.status(204).end();
+    },
+  );
 
   router.put(
     "/transactions/:id",

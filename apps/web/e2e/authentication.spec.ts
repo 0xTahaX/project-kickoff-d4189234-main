@@ -1,17 +1,52 @@
 import { expect, test } from "@playwright/test";
 
-test("the removed authentication routes open the guest dashboard", async ({ page }) => {
+test("account routes open authentication and still allow an explicit guest session", async ({ page }) => {
   for (const route of ["/", "/login", "/register", "/forgot-password", "/reset-password"]) {
     await page.goto(route);
+    await expect(page).toHaveURL(/\/legacy\/index\.html(?:\?.*)?$/);
+    await expect(page.getByRole("button", { name: "ادامه به عنوان مهمان" })).toBeVisible();
+    await page.getByRole("button", { name: "ادامه به عنوان مهمان" }).click();
     await expect(page).toHaveURL(/\/legacy\/index\.html\?preview=1$/);
     await expect(page.getByRole("button", { name: "تراکنش‌ها" })).toBeVisible();
   }
 });
 
-test("the legacy account page opens the guest dashboard", async ({ page }) => {
+test("the legacy account page opens auth and exposes the guest dashboard", async ({ page }) => {
   await page.goto("/legacy/account.html");
   await expect(page).toHaveURL(/\/legacy\/index\.html$/);
+  await expect(page.getByRole("button", { name: "ادامه به عنوان مهمان" })).toBeVisible();
+  await page.getByRole("button", { name: "ادامه به عنوان مهمان" }).click();
   await expect(page.getByRole("button", { name: "تراکنش‌ها" })).toBeVisible();
+});
+
+test("registration and email verification are connected to the authentication API", async ({ page }) => {
+  await page.route("**/api/me", (route) =>
+    route.fulfill({ status: 401, json: { code: "UNAUTHORIZED", message: "وارد نشده‌اید." } }),
+  );
+  await page.route("**/api/auth/register", (route) =>
+    route.fulfill({
+      status: 201,
+      json: { message: "حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید." },
+    }),
+  );
+  await page.route("**/api/auth/verify-email", (route) =>
+    route.fulfill({ status: 200, json: { message: "ایمیل تأیید شد. اکنون می‌توانید وارد شوید." } }),
+  );
+
+  await page.goto("/");
+  await page.getByLabel("نام", { exact: true }).fill("آزمایشی");
+  await page.getByLabel("ایمیل", { exact: true }).last().fill("test@example.com");
+  await page
+    .getByLabel("گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)")
+    .fill("securepass123");
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "ساخت حساب" }).click();
+  await expect(page.getByText("حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید."))
+    .toBeVisible();
+
+  await page.goto("/legacy/index.html?verify=test-token-that-is-long-enough-1234567890");
+  await page.getByRole("button", { name: "تأیید ایمیل و ادامه" }).click();
+  await expect(page.getByText("ایمیل تأیید شد. اکنون می‌توانید وارد شوید.")).toBeVisible();
 });
 
 test("guest users can record an asset and track an investment holding", async ({ page }) => {
@@ -201,11 +236,58 @@ test("CSV transaction import validates, maps, deduplicates, and previews before 
   await expect(page.getByText("آمادهٔ ورود: 1", { exact: false })).toBeVisible();
   await expect(page.getByText("2026-10-01", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "ورود 1 تراکنش معتبر" }).click();
-  await expect(page.getByText("تعداد تراکنش محلی: 1", { exact: false })).toBeVisible();
+  await expect(page.getByText("تعداد تراکنش: 1", { exact: false })).toBeVisible();
 
   await page.locator("[data-phase5-file]").setInputFiles(file);
   await expect(page.getByText("تکراری: 1", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "ورود 0 تراکنش معتبر" })).toBeDisabled();
+});
+
+test("authenticated CSV imports are sent to the server ledger", async ({ page }) => {
+  let importBody: {
+    accounts: { id: string }[];
+    categories: { id: string; kind: string }[];
+    transactions: { id: string; account_id: string; category_id: string }[];
+  } | null = null;
+  await page.route("**/api/me", (route) =>
+    route.fulfill({ json: { id: "11111111-1111-4111-8111-111111111111", primary_currency: "IRR" } }),
+  );
+  await page.route("**/api/finance/workspace", (route) =>
+    route.fulfill({ json: {} }),
+  );
+  await page.route("**/api/finance/workspace/**", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/finance/ledger", (route) =>
+    route.fulfill({ json: { currency: "IRR", accounts: [], categories: [], transactions: [] } }),
+  );
+  await page.route("**/api/finance/transactions/import", async (route) => {
+    importBody = route.request().postDataJSON();
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/legacy/index.html");
+  await page.getByRole("button", { name: "تنظیمات" }).click();
+  const contents = [
+    "date,type,amount,account,category,description,note,targetAccount",
+    "2026-10-01,expense,250,نقد,خوراک,خرید آزمایشی,یادداشت,",
+  ].join("\r\n");
+  await page.locator("[data-phase5-file]").setInputFiles({
+    name: "transactions.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(contents, "utf8"),
+  });
+  await page.getByRole("button", { name: "ورود 1 تراکنش معتبر" }).click();
+  await expect(page.getByText("تعداد تراکنش: 1", { exact: false })).toBeVisible();
+  expect(importBody).not.toBeNull();
+  expect(importBody?.transactions).toHaveLength(1);
+  expect(importBody?.transactions[0].id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
+  expect(importBody?.accounts.map((account) => account.id)).toContain(
+    importBody?.transactions[0].account_id,
+  );
+  expect(importBody?.categories.map((category) => category.id)).toContain(
+    importBody?.transactions[0].category_id,
+  );
 });
 
 test("local notifications are deduplicated and preference-controlled", async ({ page }) => {

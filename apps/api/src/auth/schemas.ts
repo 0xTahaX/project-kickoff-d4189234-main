@@ -42,6 +42,8 @@ export const loginSchema = z
   .strict();
 
 export const forgotPasswordSchema = z.object({ email }).strict();
+export const verifyEmailSchema = z.object({ token: z.string().min(32).max(128) }).strict();
+export const resendVerificationSchema = z.object({ email }).strict();
 export const resetPasswordSchema = z
   .object({ token: z.string().min(32).max(128), new_password: password })
   .strict();
@@ -55,7 +57,6 @@ export const profileSchema = z
   .object({
     first_name: name.optional(),
     last_name: z.string().trim().max(50).optional(),
-    email: email.optional(),
     preferred_language: z.enum(["fa", "en"]).optional(),
     primary_currency: z.enum(["IRR", "USD", "EUR", "GBP"]).optional(),
   })

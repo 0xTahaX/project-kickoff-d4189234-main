@@ -2,7 +2,10 @@
   "use strict";
 
   const Core = window.DaraPhase4Core;
-  const STORE_KEY = "dara.phase4.preview.v1";
+  const STORE_KEY = () => {
+    const userId = window.DARA_USER_ID || "preview";
+    return userId === "preview" ? "dara.phase4.preview.v1" : `dara.phase4.${userId}.v1`;
+  };
   const CLASSIFICATION_LABELS = {
     unclassified: "دسته‌بندی‌نشده",
     external_deposit: "واریز خارجی",
@@ -39,7 +42,7 @@
   let busyWallet = "";
 
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(STORE_KEY());
     state = raw ? Core.validateState(JSON.parse(raw)) : Core.initialState();
   } catch (error) {
     state = Core.initialState();
@@ -68,7 +71,8 @@
     if (stateError)
       throw new Error(`${stateError}؛ برای جلوگیری از بازنویسی، ذخیره‌سازی متوقف شد.`);
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORE_KEY(), JSON.stringify(state));
+      window.DARA_SYNC_WORKSPACE?.("blockchain", state);
     } catch (error) {
       throw new Error(
         error instanceof Error ? `ذخیره‌سازی محلی ناموفق بود: ${error.message}` : "ذخیره‌سازی محلی ناموفق بود.",

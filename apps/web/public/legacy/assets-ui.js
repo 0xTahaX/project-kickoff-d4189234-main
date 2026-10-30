@@ -2,7 +2,10 @@
   "use strict";
 
   const Core = window.DaraAssetsCore;
-  const STORE_KEY = "dara.assets.preview.v1";
+  const STORE_KEY = () => {
+    const userId = window.DARA_USER_ID || "preview";
+    return userId === "preview" ? "dara.assets.preview.v1" : `dara.assets.${userId}.v1`;
+  };
   const labels = {
     cash: "نقد و سپرده",
     precious_metal: "فلزات گران‌بها",
@@ -38,7 +41,7 @@
 
   function load() {
     try {
-      const raw = localStorage.getItem(STORE_KEY);
+      const raw = localStorage.getItem(STORE_KEY());
       state = raw ? Core.validateState(JSON.parse(raw)) : Core.initialState();
     } catch (error) {
       state = Core.initialState();
@@ -52,7 +55,8 @@
   function save() {
     if (loadError) throw new Error(`${loadError}؛ برای جلوگیری از بازنویسی، ذخیره‌سازی متوقف شد.`);
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORE_KEY(), JSON.stringify(state));
+      window.DARA_SYNC_WORKSPACE?.("assets", state);
     } catch (error) {
       throw new Error(
         error instanceof Error ? `ذخیره‌سازی مرورگر ناموفق بود: ${error.message}` : "ذخیره‌سازی مرورگر ناموفق بود.",

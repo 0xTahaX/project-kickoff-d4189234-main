@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { saveTransactionSchema } from "./routes.js";
+import { importTransactionsSchema, saveTransactionSchema } from "./routes.js";
 
 const acc = "11111111-1111-4111-8111-111111111111";
 const acc2 = "22222222-2222-4222-8222-222222222222";
@@ -61,5 +61,36 @@ describe("saving a transaction", () => {
       category: null,
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("importing transactions", () => {
+  const input = {
+    accounts: [account(acc)],
+    categories: [{ id: cat, name: "خوراک", kind: "EXPENSE" }],
+    transactions: [base],
+  };
+
+  it("accepts a batch that references its declared account and category", () => {
+    expect(importTransactionsSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("rejects a batch with a transaction referencing a mismatched category", () => {
+    const result = importTransactionsSchema.safeParse({
+      ...input,
+      categories: [{ id: cat, name: "حقوق", kind: "INCOME" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects batches larger than the transaction limit", () => {
+    const result = importTransactionsSchema.safeParse({
+      ...input,
+      transactions: Array.from({ length: 5_001 }, (_, index) => ({
+        ...base,
+        id: `${String(index + 1).padStart(8, "0")}-4444-4444-8444-444444444444`,
+      })),
+    });
+    expect(result.success).toBe(false);
   });
 });

@@ -22,6 +22,47 @@ export class PrismaAuthRepository implements AuthRepository {
     return this.prisma.user.create({ data: user });
   }
 
+  async createEmailVerification(
+    tokenHash: string,
+    userId: string,
+    expiresAt: Date,
+  ): Promise<void> {
+    await this.prisma.$transaction(
+      [
+        this.prisma.emailVerification.deleteMany({ where: { userId } }),
+        this.prisma.emailVerification.create({ data: { tokenHash, userId, expiresAt } }),
+      ],
+      { maxWait: TRANSACTION_MAX_WAIT_MS, timeout: TRANSACTION_MAX_WAIT_MS },
+    );
+  }
+
+  async consumeEmailVerification(tokenHash: string, now: Date): Promise<User | null> {
+    return this.prisma.$transaction(
+      async (db) => {
+        const verification = await db.emailVerification.findFirst({
+          where: { tokenHash, expiresAt: { gt: now } },
+          select: { userId: true },
+        });
+        if (!verification) return null;
+        const deleted = await db.emailVerification.deleteMany({
+          where: { tokenHash, expiresAt: { gt: now } },
+        });
+        if (!deleted.count) return null;
+        const user = await db.user.update({
+          where: { id: verification.userId },
+          data: { emailVerifiedAt: now },
+        });
+        await db.emailVerification.deleteMany({ where: { userId: user.id } });
+        return user;
+      },
+      { maxWait: TRANSACTION_MAX_WAIT_MS, timeout: TRANSACTION_MAX_WAIT_MS },
+    );
+  }
+
+  async deleteEmailVerification(tokenHash: string): Promise<void> {
+    await this.prisma.emailVerification.deleteMany({ where: { tokenHash } });
+  }
+
   findUserByEmail(email: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { email } });
   }
@@ -135,8 +176,9 @@ export class PrismaAuthRepository implements AuthRepository {
       [
         this.prisma.session.deleteMany({ where: { expiresAt: { lte: now } } }),
         this.prisma.passwordReset.deleteMany({ where: { expiresAt: { lte: now } } }),
+        this.prisma.emailVerification.deleteMany({ where: { expiresAt: { lte: now } } }),
       ],
-      { maxWait: TRANSACTION_MAX_WAIT_MS },
+      { maxWait: TRANSACTION_MAX_WAIT_MS, timeout: TRANSACTION_MAX_WAIT_MS },
     );
   }
 }

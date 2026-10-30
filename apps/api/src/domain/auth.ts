@@ -4,6 +4,7 @@ export interface User {
   firstName: string;
   lastName: string;
   email: string;
+  emailVerifiedAt: Date | null;
   passwordHash: string;
   passwordSalt: string;
   preferredLanguage: string;
@@ -42,7 +43,6 @@ export interface NewSession {
 export interface ProfileUpdate {
   firstName?: string;
   lastName?: string;
-  email?: string;
   preferredLanguage?: string;
   primaryCurrency?: string;
 }
@@ -62,6 +62,9 @@ export interface SessionSummary {
 // این contract اجازه می‌دهد مسیرهای HTTP بدون اتصال واقعی به PostgreSQL نیز تست شوند.
 export interface AuthRepository {
   createUser(user: NewUser): Promise<User>;
+  createEmailVerification(tokenHash: string, userId: string, expiresAt: Date): Promise<void>;
+  deleteEmailVerification(tokenHash: string): Promise<void>;
+  consumeEmailVerification(tokenHash: string, now: Date): Promise<User | null>;
   findUserByEmail(email: string): Promise<User | null>;
   findUserById(id: string): Promise<User | null>;
   updateProfile(id: string, update: ProfileUpdate): Promise<User>;

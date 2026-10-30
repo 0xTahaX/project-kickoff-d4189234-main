@@ -17,6 +17,65 @@
     <dialog id="dlg"></dialog>
     <script>
       window.DARA_USER_ID = "preview";
+      window.DARA_BOOT_ERROR = "";
+      const workspaceStorageKey = (key) => {
+        const userId = window.DARA_USER_ID;
+        const suffix = userId === "preview" ? "preview" : userId;
+        return {
+          dashboard: `dara.v2.${userId}`,
+          assets: `dara.assets.${suffix}.v1`,
+          blockchain: `dara.phase4.${suffix}.v1`,
+          preferences: `dara.phase5.${suffix}.v1`,
+          reminders: `dara.phase5.events.${suffix}.v1`,
+        }[key];
+      };
+      const requestHeaders = { "X-Requested-With": "dara" };
+      async function prepareUserWorkspace() {
+        if (new URLSearchParams(location.search).get("preview") === "1") return;
+        try {
+          const profile = await fetch("/api/me", {
+            credentials: "same-origin",
+            headers: requestHeaders,
+          });
+          if (profile.status === 401) return;
+          if (!profile.ok) throw new Error("بررسی نشست کاربر ناموفق بود.");
+          const user = await profile.json();
+          window.DARA_USER_ID = user.id;
+          const workspaceResponse = await fetch("/api/finance/workspace", {
+            credentials: "same-origin",
+            headers: requestHeaders,
+          });
+          if (!workspaceResponse.ok)
+            throw new Error("دریافت اطلاعات ذخیره‌شده از سرور ناموفق بود.");
+          const workspace = await workspaceResponse.json();
+          for (const [key, storageKey] of Object.entries({
+            dashboard: workspaceStorageKey("dashboard"),
+            assets: workspaceStorageKey("assets"),
+            blockchain: workspaceStorageKey("blockchain"),
+            preferences: workspaceStorageKey("preferences"),
+            reminders: workspaceStorageKey("reminders"),
+          })) {
+            if (Object.prototype.hasOwnProperty.call(workspace, key)) {
+              localStorage.setItem(storageKey, JSON.stringify(workspace[key]));
+            } else {
+              const localValue = localStorage.getItem(storageKey);
+              if (localValue !== null) {
+                const data = JSON.parse(localValue);
+                const saved = await fetch(`/api/finance/workspace/${key}`, {
+                  method: "PUT",
+                  credentials: "same-origin",
+                  headers: { ...requestHeaders, "Content-Type": "application/json" },
+                  body: JSON.stringify({ data }),
+                });
+                if (!saved.ok) throw new Error("انتقال دادهٔ محلی به سرور ناموفق بود.");
+              }
+            }
+          }
+        } catch (error) {
+          window.DARA_BOOT_ERROR =
+            error instanceof Error ? error.message : "آماده‌سازی داده‌های حساب ناموفق بود.";
+        }
+      }
       const loadApp = () => {
         const app = document.createElement("script");
         app.src = "app.js";
@@ -64,25 +123,28 @@
         };
         document.body.append(phase4Core);
       };
-      const assetsCore = document.createElement("script");
-      assetsCore.src = "assets-core.js";
-      assetsCore.onerror = () => {
-        document.getElementById("m").innerHTML =
-          '<section class="card">بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید.</section>';
-      };
-      assetsCore.onload = () => {
-        const assetsUi = document.createElement("script");
-        assetsUi.src = "assets-ui.js";
-        assetsUi.onload = () => {
-          const marketsUi = document.createElement("script");
-          marketsUi.src = "markets-ui.js";
-          marketsUi.onload = loadPhase4;
-          marketsUi.onerror = loadPhase4;
-          document.body.append(marketsUi);
+      function loadFeatures() {
+        const assetsCore = document.createElement("script");
+        assetsCore.src = "assets-core.js";
+        assetsCore.onerror = () => {
+          document.getElementById("m").innerHTML =
+            '<section class="card">بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید.</section>';
         };
-        document.body.append(assetsUi);
-      };
-      document.body.append(assetsCore);
+        assetsCore.onload = () => {
+          const assetsUi = document.createElement("script");
+          assetsUi.src = "assets-ui.js";
+          assetsUi.onload = () => {
+            const marketsUi = document.createElement("script");
+            marketsUi.src = "markets-ui.js";
+            marketsUi.onload = loadPhase4;
+            marketsUi.onerror = loadPhase4;
+            document.body.append(marketsUi);
+          };
+          document.body.append(assetsUi);
+        };
+        document.body.append(assetsCore);
+      }
+      prepareUserWorkspace().finally(loadFeatures);
     </script>
   </body>
 </html>

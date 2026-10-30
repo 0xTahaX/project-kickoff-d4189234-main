@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 
-const previewPath = "/legacy/index.html?preview=1";
-const redirectToPreview = () => window.location.replace(previewPath);
+const previewPath = () => `/legacy/index.html${window.location.search}`;
+const redirectToPreview = () => window.location.replace(previewPath());
 
 function PreviewRedirect({ redirect }: { redirect: () => void }) {
   useEffect(() => {
@@ -34,7 +34,7 @@ export function App({
         element={
           <article className="document">
             <h1>حریم خصوصی</h1>
-            <p>تراکنش‌ها، حساب‌ها و دسته‌بندی‌های شما پس از ورود در پایگاه دادهٔ دارا (Supabase) ذخیره می‌شوند و فقط برای خود شما قابل دسترسی‌اند؛ بقیهٔ تنظیمات داشبورد در مرورگر می‌ماند.</p>
+            <p>برای ساخت حساب، ایمیل باید تأیید شود. تراکنش‌ها، حساب‌ها، دسته‌بندی‌ها و فضای کاری داشبورد پس از ورود در پایگاه دادهٔ سرور ذخیره و با شناسهٔ مالک از دادهٔ سایر کاربران جدا می‌شوند.</p>
           </article>
         }
       />

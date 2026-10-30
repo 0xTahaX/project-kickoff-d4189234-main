@@ -2,8 +2,12 @@
   "use strict";
 
   const Core = window.DaraPhase5Core;
-  const PREFS_KEY = "dara.phase5.preview.v1";
-  const EVENT_STATE_KEY = "dara.phase5.events.preview.v1";
+  const userSuffix = () => {
+    const userId = window.DARA_USER_ID || "preview";
+    return userId === "preview" ? "preview" : userId;
+  };
+  const PREFS_KEY = () => `dara.phase5.${userSuffix()}.v1`;
+  const EVENT_STATE_KEY = () => `dara.phase5.events.${userSuffix()}.v1`;
   const APP_KEY = `dara.v2.${window.DARA_USER_ID || "preview"}`;
   const UPLOAD_LIMIT = Core.MAX_CSV_BYTES;
   const CATEGORIES = {
@@ -46,14 +50,14 @@
     }
   }
 
-  const loadedPreferences = readLocal(PREFS_KEY, {}, (message) => { prefsError = message; });
+  const loadedPreferences = readLocal(PREFS_KEY(), {}, (message) => { prefsError = message; });
   try {
     prefs = Core.preferences(loadedPreferences);
   } catch (error) {
     prefsError = error instanceof Error ? error.message : "ترجیحات محلی معتبر نیست.";
     prefs = Core.preferences();
   }
-  const loadedEvents = readLocal(EVENT_STATE_KEY, { readIds: [] }, (message) => { eventError = message; });
+  const loadedEvents = readLocal(EVENT_STATE_KEY(), { readIds: [] }, (message) => { eventError = message; });
   if (loadedEvents && Array.isArray(loadedEvents.readIds))
     eventState = { readIds: [...new Set(loadedEvents.readIds.filter((id) => typeof id === "string"))].slice(-1_000) };
   else
@@ -67,8 +71,9 @@
     if (prefsError) throw new Error(`${prefsError}؛ ذخیرهٔ تنظیمات متوقف شد.`);
     const normalized = Core.preferences(next);
     try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(normalized));
+      localStorage.setItem(PREFS_KEY(), JSON.stringify(normalized));
       prefs = normalized;
+      window.DARA_SYNC_WORKSPACE?.("preferences", normalized);
     } catch (error) {
       throw new Error(error instanceof Error ? `ذخیرهٔ تنظیمات ناموفق بود: ${error.message}` : "ذخیرهٔ تنظیمات ناموفق بود.");
     }
@@ -77,8 +82,9 @@
   function saveEvents(next) {
     if (eventError) throw new Error(`${eventError}؛ ذخیرهٔ وضعیت یادآورها متوقف شد.`);
     try {
-      localStorage.setItem(EVENT_STATE_KEY, JSON.stringify(next));
+      localStorage.setItem(EVENT_STATE_KEY(), JSON.stringify(next));
       eventState = next;
+      window.DARA_SYNC_WORKSPACE?.("reminders", next);
     } catch (error) {
       throw new Error(error instanceof Error ? `ذخیرهٔ یادآورها ناموفق بود: ${error.message}` : "ذخیرهٔ یادآورها ناموفق بود.");
     }
@@ -187,7 +193,13 @@
   }
 
   function exportBackup() {
-    const keys = [APP_KEY, "dara.assets.preview.v1", "dara.phase4.preview.v1", PREFS_KEY, EVENT_STATE_KEY];
+    const keys = [
+      APP_KEY,
+      window.DARA_USER_ID === "preview" ? "dara.assets.preview.v1" : `dara.assets.${window.DARA_USER_ID}.v1`,
+      window.DARA_USER_ID === "preview" ? "dara.phase4.preview.v1" : `dara.phase4.${window.DARA_USER_ID}.v1`,
+      PREFS_KEY(),
+      EVENT_STATE_KEY(),
+    ];
     const backup = { format: "dara-local-backup-v1", exportedAt: new Date().toISOString(), storage: {} };
     for (const key of keys) {
       const value = localStorage.getItem(key);
@@ -237,22 +249,30 @@
 
   function renderPrivacy(state) {
     const periods = state.tx.map((transaction) => transaction.date).sort();
-    return `<section class="card"><h3>حریم خصوصی و مدیریت داده</h3><p>این نسخه حالت مهمان دارد. تراکنش‌ها، تنظیمات دارایی، کیف‌پول، ژورنال، ترجیحات و یادآورها در localStorage دستگاه نگهداری می‌شوند؛ هیچ حسابی برای کاربر فعال نیست و حذف حساب سروری، نشست‌ها یا اتصال بیرونی در این نسخه وجود ندارد.</p><p>دادهٔ تراکنش در این مرورگر را می‌توان با CSV صادر کرد؛ پشتیبان JSON برای کلیدهای محلی برنامه نیز قابل دریافت است. فایل‌ها حاوی اطلاعات مالی حساس‌اند؛ آن‌ها را در مسیر امن نگهداری کنید.</p><p>تعداد تراکنش محلی: ${state.tx.length} · بازهٔ ثبت‌شده: ${escape(periods[0] || "—")} تا ${escape(periods.at(-1) || "—")} · رضایت AI بیرونی: ${prefs.consentToExternalAi ? "ثبت شده، ولی فعلاً هیچ داده‌ای ارسال نمی‌شود" : "داده‌ای ارسال نمی‌شود"}.</p><p>داده‌های محلی حذف نمی‌شوند مگر آنکه خودتان پاک‌سازی مرورگر/دادهٔ برنامه را انتخاب کنید. پاک‌سازی دستگاه برگشت‌پذیر نیست مگر فایل پشتیبان داشته باشید؛ حذف قانونی/سروری موضوعیت ندارد چون همگام‌سازی سروری نداریم.</p><div class="phase5-actions"><button class="b" type="button" data-phase5-action="export-csv">دانلود CSV تراکنش‌ها</button><button class="b" type="button" data-phase5-action="export-backup">دانلود پشتیبان JSON</button><label class="phase5-file">پیش‌نمایش ورود تراکنش CSV (حداکثر ۱ مگابایت، حداکثر ۵۰۰۰ ردیف)<input type="file" accept=".csv,text/csv" data-phase5-file></label></div>${csvError ? status(csvError, true) : ""}${importReview(state)}<button type="button" class="phase5-danger" data-phase5-action="clear-local">پاک‌سازی داده‌های همین دستگاه</button><p class="mu">این کار فقط کلیدهای Dara در این مرورگر را حذف می‌کند؛ نسخهٔ سروری یا نسخهٔ پشتیبان دیگری وجود ندارد.</p></section>`;
+    const storageNotice = window.DARA_IS_AUTHENTICATED
+      ? "داده‌های حساب شما در پایگاه دادهٔ سرور و یک نسخهٔ cache در این مرورگر ذخیره می‌شوند. داده‌های دفتر حساب، دارایی‌ها، کیف‌پول، ترجیحات و یادآورها با حساب شما همگام می‌شوند."
+      : "در حالت مهمان، اطلاعات فقط در همین مرورگر ذخیره می‌شوند و بین دستگاه‌ها همگام نیستند.";
+    return `<section class="card"><h3>حریم خصوصی و مدیریت داده</h3><p>${storageNotice}</p><p>دادهٔ تراکنش را می‌توان با CSV صادر کرد؛ پشتیبان JSON برای کلیدهای محلی برنامه نیز قابل دریافت است. فایل‌ها حاوی اطلاعات مالی حساس‌اند؛ آن‌ها را در مسیر امن نگهداری کنید.</p><p>تعداد تراکنش: ${state.tx.length} · بازهٔ ثبت‌شده: ${escape(periods[0] || "—")} تا ${escape(periods.at(-1) || "—")} · رضایت AI بیرونی: ${prefs.consentToExternalAi ? "ثبت شده، ولی فعلاً هیچ داده‌ای ارسال نمی‌شود" : "داده‌ای ارسال نمی‌شود"}.</p><p>پاک‌سازی داده‌های همین دستگاه فقط cache محلی را حذف می‌کند؛ دادهٔ حساب روی سرور باقی می‌ماند.</p><div class="phase5-actions"><button class="b" type="button" data-phase5-action="export-csv">دانلود CSV تراکنش‌ها</button><button class="b" type="button" data-phase5-action="export-backup">دانلود پشتیبان JSON</button><label class="phase5-file">پیش‌نمایش ورود تراکنش CSV (حداکثر ۱ مگابایت، حداکثر ۵۰۰۰ ردیف)<input type="file" accept=".csv,text/csv" data-phase5-file></label></div>${csvError ? status(csvError, true) : ""}${importReview(state)}<button type="button" class="phase5-danger" data-phase5-action="clear-local">پاک‌سازی cache همین دستگاه</button></section>`;
   }
 
-  function applyCsv(state) {
+  async function applyCsv(state) {
     if (!csvText) throw new Error("ابتدا یک CSV معتبر را برای پیش‌نمایش انتخاب کنید.");
     csvPreview = Core.previewCsv(csvText, state, csvMappings);
     if (csvPreview.invalid || csvPreview.mappingRequired)
       throw new Error("ردیف نامعتبر یا نگاشت‌نشده وجود دارد؛ هیچ ردیفی وارد نشد. نگاشت‌ها را کامل یا فایل را اصلاح کنید.");
     if (!csvPreview.importable) throw new Error("ردیف جدیدی برای ورود وجود ندارد.");
-    const next = state.tx.concat(
-      csvPreview.items
-        .filter((item) => item.status === "ready")
-        .map((item) => ({ id: `csv-${crypto.randomUUID()}`, ...item.transaction })),
-    );
+    const imported = csvPreview.items
+      .filter((item) => item.status === "ready")
+      .map((item) => ({ id: crypto.randomUUID(), ...item.transaction }));
+    const next = state.tx.concat(imported);
+    if (window.DARA_IS_AUTHENTICATED) {
+      if (typeof window.DARA_IMPORT_TRANSACTIONS !== "function")
+        throw new Error("ذخیرهٔ تراکنش‌ها در پایگاه داده در دسترس نیست.");
+      await window.DARA_IMPORT_TRANSACTIONS(imported);
+    }
     try {
       localStorage.setItem(APP_KEY, JSON.stringify({ ...state, tx: next }));
+      window.DARA_SYNC_WORKSPACE?.("dashboard", { ...state, tx: next });
     } catch (error) {
       throw new Error(error instanceof Error ? `ذخیرهٔ تراکنش‌های واردشده ناموفق بود: ${error.message}` : "ذخیره‌سازی CSV ناموفق بود.");
     }
@@ -266,7 +286,13 @@
   function clearLocalData() {
     if (!window.confirm("داده‌های مالی و تنظیمات Dara در این مرورگر حذف شوند؟ این کار فقط همین دستگاه را پاک می‌کند و قابل بازگشت نیست.")) return;
     try {
-      for (const key of [APP_KEY, "dara.assets.preview.v1", "dara.phase4.preview.v1", PREFS_KEY, EVENT_STATE_KEY])
+      for (const key of [
+        APP_KEY,
+        window.DARA_USER_ID === "preview" ? "dara.assets.preview.v1" : `dara.assets.${window.DARA_USER_ID}.v1`,
+        window.DARA_USER_ID === "preview" ? "dara.phase4.preview.v1" : `dara.phase4.${window.DARA_USER_ID}.v1`,
+        PREFS_KEY(),
+        EVENT_STATE_KEY(),
+      ])
         localStorage.removeItem(key);
       window.location.reload();
     } catch (error) {
@@ -382,15 +408,14 @@
       clearLocalData();
     } else if (action === "commit-csv") {
       busy = true;
-      try {
-        applyCsv(state);
-        window.DARA_RENDER?.();
-      } catch (error) {
-        csvError = error instanceof Error ? error.message : "ورود CSV ناموفق بود.";
-        window.DARA_RENDER?.();
-      } finally {
-        busy = false;
-      }
+      void applyCsv(state)
+        .catch((error) => {
+          csvError = error instanceof Error ? error.message : "ورود CSV ناموفق بود.";
+        })
+        .finally(() => {
+          busy = false;
+          window.DARA_RENDER?.();
+        });
     } else if (action === "cancel-csv") {
       csvText = "";
       csvMappings = { accounts: {}, categories: {} };

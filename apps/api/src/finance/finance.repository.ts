@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../generated/prisma/client.js";
+import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { ApiError } from "../http/errors.js";
 import { TRANSACTION_MAX_WAIT_MS } from "../database/prisma-auth.repository.js";
 
@@ -33,6 +33,11 @@ export interface SaveTransactionInput {
   accounts: AccountInput[];
   category: CategoryInput | null;
 }
+export interface SaveTransactionsInput {
+  transactions: TransactionInput[];
+  accounts: AccountInput[];
+  categories: CategoryInput[];
+}
 
 export interface Ledger {
   currency: string;
@@ -41,10 +46,24 @@ export interface Ledger {
   transactions: (TransactionInput & { currency: string })[];
 }
 
+export const WORKSPACE_KEYS = [
+  "dashboard",
+  "assets",
+  "blockchain",
+  "preferences",
+  "reminders",
+] as const;
+export type WorkspaceKey = (typeof WORKSPACE_KEYS)[number];
+export type WorkspaceData = Partial<Record<WorkspaceKey, Prisma.JsonValue>>;
+
 // ذخیره‌سازی دفتر مالی؛ هر پرس‌وجو با userId محدود می‌شود تا دادهٔ کاربران از هم جدا بماند.
 export interface FinanceStore {
   getLedger(userId: string): Promise<Ledger>;
+  getWorkspace(userId: string): Promise<WorkspaceData>;
+  saveWorkspace(userId: string, key: WorkspaceKey, data: Prisma.InputJsonValue): Promise<void>;
+  deleteWorkspace(userId: string, key: WorkspaceKey): Promise<void>;
   saveTransaction(userId: string, input: SaveTransactionInput): Promise<void>;
+  saveTransactions(userId: string, input: SaveTransactionsInput): Promise<void>;
   deleteTransaction(userId: string, id: string): Promise<boolean>;
   deleteAccount(userId: string, id: string): Promise<boolean>;
 }
@@ -95,59 +114,153 @@ export class PrismaFinanceRepository implements FinanceStore {
     };
   }
 
+  async getWorkspace(userId: string): Promise<WorkspaceData> {
+    const records = await this.prisma.userWorkspace.findMany({
+      where: { userId },
+      select: { key: true, data: true },
+    });
+    const workspace: WorkspaceData = {};
+    for (const record of records) {
+      if ((WORKSPACE_KEYS as readonly string[]).includes(record.key))
+        workspace[record.key as WorkspaceKey] = record.data;
+    }
+    return workspace;
+  }
+
+  async saveWorkspace(
+    userId: string,
+    key: WorkspaceKey,
+    data: Prisma.InputJsonValue,
+  ): Promise<void> {
+    await this.prisma.userWorkspace.upsert({
+      where: { userId_key: { userId, key } },
+      create: { userId, key, data },
+      update: { data },
+    });
+  }
+
+  async deleteWorkspace(userId: string, key: WorkspaceKey): Promise<void> {
+    await this.prisma.userWorkspace.deleteMany({ where: { userId, key } });
+  }
+
   async saveTransaction(userId: string, input: SaveTransactionInput): Promise<void> {
     const currency = await this.currencyOf(userId);
-    const { transaction: t } = input;
     try {
-      await this.write(userId, currency, input, t);
+      await this.prisma.$transaction(
+        (db) => this.write(db, userId, currency, input),
+        options,
+      );
     } catch (error) {
-      const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
-      if (code === "P2002" || code === "P2003")
-        throw new ApiError(409, "LEDGER_CONFLICT", "این تراکنش با حساب یا دسته‌بندی شما سازگار نیست.");
-      throw error;
+      this.throwLedgerConflict(error);
     }
   }
 
+  async saveTransactions(userId: string, input: SaveTransactionsInput): Promise<void> {
+    const currency = await this.currencyOf(userId);
+    try {
+      await this.prisma.$transaction(async (db) => {
+        await this.writeAccountsAndCategories(
+          db,
+          userId,
+          currency,
+          input.accounts,
+          input.categories,
+        );
+        await db.transaction.deleteMany({
+          where: { userId, id: { in: input.transactions.map((transaction) => transaction.id) } },
+        });
+        await db.transaction.createMany({
+          data: input.transactions.map((transaction) => ({
+            ...this.transactionData(currency, transaction),
+            id: transaction.id,
+            userId,
+          })),
+        });
+      }, options);
+    } catch (error) {
+      this.throwLedgerConflict(error);
+    }
+  }
+
+  private throwLedgerConflict(error: unknown): never {
+    const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
+    if (code === "P2002" || code === "P2003")
+      throw new ApiError(409, "LEDGER_CONFLICT", "این تراکنش با حساب یا دسته‌بندی شما سازگار نیست.");
+    throw error;
+  }
+
   private async write(
+    db: Prisma.TransactionClient,
     userId: string,
     currency: string,
     input: SaveTransactionInput,
-    t: TransactionInput,
   ): Promise<void> {
-    await this.prisma.$transaction(async (db) => {
-      for (const account of input.accounts) {
-        const data = {
-          name: account.name,
-          type: account.type,
-          openingBalance: account.opening_balance,
-        };
-        const updated = await db.account.updateMany({ where: { id: account.id, userId }, data });
-        if (!updated.count)
-          await db.account.create({ data: { ...data, id: account.id, userId, currency } });
-      }
-      if (input.category) {
-        const c = input.category;
-        const updated = await db.category.updateMany({
-          where: { id: c.id, userId },
-          data: { name: c.name, kind: c.kind },
-        });
-        if (!updated.count)
-          await db.category.create({ data: { id: c.id, userId, name: c.name, kind: c.kind } });
-      }
+    await this.writeAccountsAndCategories(
+      db,
+      userId,
+      currency,
+      input.accounts,
+      input.category ? [input.category] : [],
+    );
+    await this.writeTransaction(db, userId, currency, input.transaction);
+  }
+
+  private async writeAccountsAndCategories(
+    db: Prisma.TransactionClient,
+    userId: string,
+    currency: string,
+    accounts: AccountInput[],
+    categories: CategoryInput[],
+  ): Promise<void> {
+    for (const account of accounts) {
       const data = {
-        kind: t.kind,
-        amount: t.amount,
-        currency,
-        occurredAt: new Date(`${t.occurred_on}T00:00:00Z`),
-        accountId: t.account_id,
-        targetId: t.target_id,
-        categoryId: t.category_id,
-        description: t.description,
-        note: t.note,
+        name: account.name,
+        type: account.type,
+        openingBalance: account.opening_balance,
       };
-      const updated = await db.transaction.updateMany({ where: { id: t.id, userId }, data });
-      if (!updated.count) await db.transaction.create({ data: { ...data, id: t.id, userId } });
-    }, options);
+      const updated = await db.account.updateMany({ where: { id: account.id, userId }, data });
+      if (!updated.count)
+        await db.account.create({ data: { ...data, id: account.id, userId, currency } });
+    }
+    for (const category of categories) {
+      const updated = await db.category.updateMany({
+        where: { id: category.id, userId },
+        data: { name: category.name, kind: category.kind },
+      });
+      if (!updated.count)
+        await db.category.create({
+          data: { id: category.id, userId, name: category.name, kind: category.kind },
+        });
+    }
+  }
+
+  private async writeTransaction(
+    db: Prisma.TransactionClient,
+    userId: string,
+    currency: string,
+    transaction: TransactionInput,
+  ): Promise<void> {
+    const data = this.transactionData(currency, transaction);
+    const updated = await db.transaction.updateMany({
+      where: { id: transaction.id, userId },
+      data,
+    });
+    if (!updated.count)
+      await db.transaction.create({ data: { ...data, id: transaction.id, userId } });
+  }
+
+  private transactionData(currency: string, transaction: TransactionInput) {
+    return {
+      kind: transaction.kind,
+      amount: transaction.amount,
+      currency,
+      occurredAt: new Date(`${transaction.occurred_on}T00:00:00Z`),
+      accountId: transaction.account_id,
+      targetId: transaction.target_id,
+      categoryId: transaction.category_id,
+      description: transaction.description,
+      note: transaction.note,
+    };
   }
 
   async deleteTransaction(userId: string, id: string): Promise<boolean> {

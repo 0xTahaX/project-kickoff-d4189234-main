@@ -178,7 +178,12 @@ if (!S || S.v !== 2) S = newState();
 const persist = () => {
   try {
     localStorage.setItem(K, JSON.stringify(S));
-  } catch {}
+  } catch (error) {
+    Cloud.syncError =
+      error instanceof Error ? `ذخیرهٔ محلی ناموفق بود: ${error.message}` : "ذخیرهٔ محلی ناموفق بود.";
+    return;
+  }
+  if (Cloud.status === "in") window.DARA_SYNC_WORKSPACE?.("dashboard", S);
 };
 let ui = {
   page: "dash",
@@ -223,8 +228,17 @@ const form = (t, f, v, save) => {
   };
   dl.showModal();
 };
-// ذخیرهٔ ابری: تراکنش‌ها از طریق سرور دارا در Supabase نوشته و خوانده می‌شوند.
-const Cloud = { user: null, status: "loading", err: "" };
+// داده‌های حساب از API دارا خوانده و در PostgreSQL همان حساب ذخیره می‌شوند.
+const Cloud = {
+  user: null,
+  status: "loading",
+  err: "",
+  syncError: "",
+  authNotice: "",
+  authMode: "login",
+  workspaceValues: new Map(),
+  workspaceSyncing: new Set(),
+};
 const api = async (method, path, body) => {
   let r;
   try {
@@ -250,10 +264,40 @@ const api = async (method, path, body) => {
         "درخواست ناموفق بود.",
     );
     e.status = r.status;
+    e.code = data && data.code;
     throw e;
   }
   return data;
 };
+const syncWorkspace = (key, data) => {
+  if (Cloud.status !== "in") return;
+  if (key === "dashboard" && data && typeof data === "object" && !Array.isArray(data)) {
+    data = { ...data };
+    delete data.tx;
+  }
+  Cloud.workspaceValues.set(key, data);
+  if (Cloud.workspaceSyncing.has(key)) return;
+  Cloud.workspaceSyncing.add(key);
+  const flush = async () => {
+    while (Cloud.workspaceValues.has(key)) {
+      const current = Cloud.workspaceValues.get(key);
+      Cloud.workspaceValues.delete(key);
+      try {
+        await api("PUT", "/finance/workspace/" + key, { data: current });
+        Cloud.syncError = "";
+      } catch (error) {
+        if (!Cloud.workspaceValues.has(key)) Cloud.workspaceValues.set(key, current);
+        Cloud.syncError = error.message;
+        Cloud.workspaceSyncing.delete(key);
+        R();
+        return;
+      }
+    }
+    Cloud.workspaceSyncing.delete(key);
+  };
+  void flush();
+};
+window.DARA_SYNC_WORKSPACE = syncWorkspace;
 // مبالغ داشبورد به «تومان» است و ارز پایهٔ حساب ریال؛ هر تومان ده ریال است.
 const factor = () =>
   Cloud.user && Cloud.user.primary_currency === "IRR" && S.cur === "تومان" ? 10 : 1;
@@ -283,13 +327,23 @@ const txDto = (t) => {
     category: c ? { id: c.id, name: c.name, kind: c.kind.toUpperCase() } : null,
   };
 };
+window.DARA_IMPORT_TRANSACTIONS = (transactions) =>
+  api("POST", "/finance/transactions/import", {
+    accounts: S.accounts.map(accDto),
+    categories: S.cats.map((category) => ({
+      id: category.id,
+      name: category.name,
+      kind: category.kind.toUpperCase(),
+    })),
+    transactions: transactions.map((transaction) => txDto(transaction).transaction),
+  });
 // تغییر را فوراً نمایش می‌دهد و اگر ذخیره در سرور شکست خورد، به حالت قبل برمی‌گرداند.
 const cloudWrite = (prevTx, work) =>
   work().catch((e) => {
     S.tx = prevTx;
     persist();
     R();
-    alert("ذخیره در Supabase ناموفق بود: " + e.message);
+    alert("ذخیره در پایگاه داده ناموفق بود: " + e.message);
   });
 const cloudSaveTx = (prevTx, t) =>
   cloudWrite(prevTx, () => api("PUT", "/finance/transactions/" + t.id, txDto(t)));
@@ -323,14 +377,16 @@ async function cloudLoad() {
     note: t.note,
   }));
   Cloud.status = "in";
+  window.DARA_IS_AUTHENTICATED = true;
   persist();
   R();
 }
 async function cloudBoot() {
   try {
     Cloud.user = await api("GET", "/me");
+    if (window.DARA_BOOT_ERROR) throw new Error(window.DARA_BOOT_ERROR);
   } catch (e) {
-    Cloud.status = e.status === 401 ? "out" : "offline";
+    Cloud.status = e.status === 401 && !window.DARA_BOOT_ERROR ? "out" : "offline";
     R();
     return;
   }
@@ -348,56 +404,139 @@ const authPage = () => {
   if (Cloud.status === "offline")
     return card(
       "سرور در دسترس نیست",
-      `<p>${E(Cloud.err || "ارتباط با سرور دارا برقرار نشد؛ بدون آن تراکنش‌ها در Supabase ذخیره نمی‌شوند.")}</p><button class=b onclick="location.reload()">تلاش دوباره</button>`,
+      `<p>${E(Cloud.err || "ارتباط با سرور برقرار نشد؛ ذخیره‌سازی آنلاین در دسترس نیست.")}</p><button class=b onclick="location.reload()">تلاش دوباره</button> <button class=pri onclick="A.continueAsGuest()">ادامه به عنوان مهمان</button>`,
     );
-  return `<h2>ورود به دارا</h2><p class=mu>تراکنش‌های شما در حساب کاربری‌تان ذخیره می‌شوند.</p>${card(
+  const params = new URLSearchParams(location.search);
+  const verifyToken = params.get("verify");
+  if (verifyToken)
+    return card(
+      "تأیید ایمیل",
+      `<p>برای فعال‌کردن حساب، تأیید ایمیل را انجام دهید.</p><p class=err id=ve></p><button class=pri onclick="A.verifyEmail()">تأیید ایمیل و ادامه</button>`,
+    );
+  const resetToken = params.get("reset");
+  if (resetToken)
+    return card(
+      "تعیین گذرواژهٔ جدید",
+      `<form onsubmit="A.resetPassword(event)"><label>گذرواژهٔ جدید<input name=password type=password autocomplete=new-password minlength=10 required></label><p class=mu>حداقل ۱۰ کاراکتر و شامل حرف و عدد.</p><p class=err id=rp></p><button class=pri>ذخیرهٔ گذرواژه</button></form>`,
+    );
+  if (Cloud.authMode === "forgot")
+    return card(
+      "بازیابی گذرواژه",
+      `<p class=mu>اگر حسابی با این ایمیل وجود داشته باشد، لینک بازیابی ارسال می‌شود.</p><form onsubmit="A.forgotPassword(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><p class=err id=fe></p><button class=pri>ارسال لینک</button> <button type=button class=b onclick="A.authMode('login')">بازگشت</button></form>`,
+    );
+  return `<h2>ورود به دارا</h2><p class=mu>پس از تأیید ایمیل، حساب و اطلاعات شما در پایگاه داده ذخیره می‌شوند و با همان حساب از دستگاه‌های دیگر هم قابل دسترسی‌اند.</p><button class=b onclick="A.continueAsGuest()">ادامه بدون حساب (مهمان)</button>${Cloud.authNotice ? `<p class=phase5-status role=status>${E(Cloud.authNotice)}</p>` : ""}${card(
     "ورود",
-    `<form onsubmit="A.login(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه<input name=password type=password autocomplete=current-password required></label><p class=err id=le></p><button class=pri>ورود</button></form>`,
+    `<form onsubmit="A.login(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه<input name=password type=password autocomplete=current-password required></label><p class=err id=le></p><button class=pri>ورود</button> <button type=button class=b onclick="A.authMode('forgot')">فراموشی گذرواژه</button></form><form onsubmit="A.resendVerification(event)"><label>ایمیل برای ارسال دوبارهٔ لینک تأیید<input name=email type=email autocomplete=email required></label><p class=err id=se></p><button class=b>ارسال دوبارهٔ ایمیل تأیید</button></form>`,
   )}${card(
     "ثبت‌نام",
-    `<form onsubmit="A.register(event)"><label>نام<input name=first_name required></label><label>نام خانوادگی (اختیاری)<input name=last_name></label><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)<input name=password type=password autocomplete=new-password required></label><label><input name=accepted_terms type=checkbox required> <a href="terms.html" target=_blank>شرایط استفاده</a> را می‌پذیرم</label><p class=err id=re></p><button class=pri>ساخت حساب</button></form>`,
+    `<form onsubmit="A.register(event)"><label>نام<input name=first_name autocomplete=given-name required></label><label>نام خانوادگی (اختیاری)<input name=last_name autocomplete=family-name></label><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)<input name=password type=password autocomplete=new-password minlength=10 required></label><label><input name=accepted_terms type=checkbox required> <a href="/terms" target=_blank>شرایط استفاده</a> را می‌پذیرم</label><p class=err id=re></p><button class=pri>ساخت حساب</button></form>`,
   )}`;
 };
 const signedIn = async (email, password) => {
-  const r = await api("POST", "/auth/login", { email, password, remember: true });
-  Cloud.user = r.user;
-  await cloudLoad();
+  await api("POST", "/auth/login", { email, password, remember: true });
+  window.location.reload();
 };
 const A = {
+  continueAsGuest: () => {
+    window.location.replace("/legacy/index.html?preview=1");
+  },
+  openAccount: () => {
+    window.location.replace("/legacy/index.html");
+  },
+  retryWorkspace: () => {
+    Cloud.syncError = "";
+    for (const [key, data] of Cloud.workspaceValues) syncWorkspace(key, data);
+  },
+  authMode: (mode) => {
+    Cloud.authMode = mode;
+    Cloud.authNotice = "";
+    R();
+  },
   login: async (e) => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
     try {
       await signedIn(d.email, d.password);
     } catch (x) {
-      $("le").textContent = x.message;
+      $("le").textContent =
+        x.code === "EMAIL_NOT_VERIFIED"
+          ? `${x.message} از فرم زیر برای ارسال دوبارهٔ لینک استفاده کنید.`
+          : x.message;
     }
   },
   register: async (e) => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target));
     try {
-      await api("POST", "/auth/register", {
+      const result = await api("POST", "/auth/register", {
         first_name: d.first_name,
         last_name: d.last_name || "",
         email: d.email,
         password: d.password,
         accepted_terms: d.accepted_terms === "on",
       });
-      await signedIn(d.email, d.password);
+      Cloud.authNotice = result.message;
+      Cloud.authMode = "login";
+      R();
     } catch (x) {
       $("re").textContent = x.message;
+    }
+  },
+  verifyEmail: async () => {
+    const token = new URLSearchParams(location.search).get("verify");
+    if (!token) return;
+    try {
+      const result = await api("POST", "/auth/verify-email", { token });
+      history.replaceState(null, "", "/legacy/index.html");
+      Cloud.authNotice = result.message;
+      R();
+    } catch (error) {
+      $("ve").textContent = error.message;
+    }
+  },
+  resendVerification: async (e) => {
+    e.preventDefault();
+    const { email } = Object.fromEntries(new FormData(e.target));
+    try {
+      const result = await api("POST", "/auth/resend-verification", { email });
+      $("se").textContent = result.message;
+    } catch (error) {
+      $("se").textContent = error.message;
+    }
+  },
+  forgotPassword: async (e) => {
+    e.preventDefault();
+    const { email } = Object.fromEntries(new FormData(e.target));
+    try {
+      const result = await api("POST", "/auth/forgot-password", { email });
+      $("fe").textContent = result.message;
+    } catch (error) {
+      $("fe").textContent = error.message;
+    }
+  },
+  resetPassword: async (e) => {
+    e.preventDefault();
+    const { password } = Object.fromEntries(new FormData(e.target));
+    const token = new URLSearchParams(location.search).get("reset");
+    try {
+      const result = await api("POST", "/auth/reset-password", {
+        token,
+        new_password: password,
+      });
+      history.replaceState(null, "", "/legacy/index.html");
+      Cloud.authNotice = result.message;
+      R();
+    } catch (error) {
+      $("rp").textContent = error.message;
     }
   },
   logout: async () => {
     try {
       await api("POST", "/auth/logout");
-    } catch {}
-    Cloud.user = null;
-    Cloud.status = "out";
-    K = `dara.v2.${window.DARA_USER_ID}`;
-    S = newState();
-    R();
+      window.location.reload();
+    } catch (error) {
+      alert("خروج از حساب ناموفق بود: " + error.message);
+    }
   },
   nav: (p) => {
     ui.page = p;
@@ -638,10 +777,20 @@ const A = {
       S.rec.some((r) => r.acc === id)
     )
       return alert("این حساب تراکنش دارد و قابل حذف نیست.");
+    const removed = S.accounts.find((account) => account.id === id);
+    if (!removed) return;
     S.accounts = S.accounts.filter((a) => a.id !== id);
-    api("DELETE", "/finance/accounts/" + id).catch(() => {});
     persist();
     R();
+    if (Cloud.status === "in") {
+      api("DELETE", "/finance/accounts/" + id).catch((error) => {
+        if (!S.accounts.some((account) => account.id === id))
+          S.accounts = S.accounts.concat(removed);
+        persist();
+        R();
+        alert("حذف حساب از پایگاه داده ناموفق بود: " + error.message);
+      });
+    }
   },
   cat: () =>
     form(
@@ -938,7 +1087,8 @@ const NAV = [
   ["set", "تنظیمات"],
 ];
 function R() {
-  if (Cloud.status !== "in") {
+  window.DARA_IS_AUTHENTICATED = Cloud.status === "in";
+  if (Cloud.status !== "in" && Cloud.status !== "guest") {
     $("nav").innerHTML = "<b>دارا</b>";
     $("m").innerHTML = authPage();
     return;
@@ -955,9 +1105,19 @@ function R() {
       (n) =>
         `<button class="${ui.page === n[0] ? "on" : ""}" onclick="A.nav('${n[0]}')">${n[1]}</button>`,
     ).join("") +
-    `<button onclick="A.logout()">خروج (${E(Cloud.user.first_name)})</button>`;
-  $("m").innerHTML = pages[ui.page === "goals" ? "goals" : ui.page]();
+    (Cloud.status === "in"
+      ? `<button onclick="A.logout()">خروج (${E(Cloud.user.first_name)})</button>`
+      : '<button onclick="A.openAccount()">ورود / ساخت حساب</button>');
+  $("m").innerHTML =
+    (Cloud.syncError
+      ? `<section class="card" role="alert"><p>همگام‌سازی داده با سرور ناموفق بود: ${E(Cloud.syncError)}</p><button class="b" onclick="A.retryWorkspace()">تلاش دوباره</button></section>`
+      : "") + pages[ui.page === "goals" ? "goals" : ui.page]();
 }
 window.DARA_RENDER = R;
-R();
-cloudBoot();
+if (new URLSearchParams(location.search).get("preview") === "1") {
+  Cloud.status = "guest";
+  R();
+} else {
+  R();
+  cloudBoot();
+}

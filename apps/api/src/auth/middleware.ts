@@ -32,7 +32,7 @@ export function authentication(repository: AuthRepository): RequestHandler {
       return;
     }
     const active = await repository.findActiveSession(hashToken(token), new Date());
-    if (active) {
+    if (active?.user.emailVerifiedAt) {
       request.rawSessionToken = token;
       request.authSession = active.session;
       request.authUser = active.user;
