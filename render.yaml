@@ -1,7 +1,7 @@
 services:
   - type: web
     # The onrender.com subdomain must be globally unique; change the name if Render reports it is taken.
-    name: dara-app-0xtaha
+    name: dara-app-0xtahaa
     runtime: node
     plan: free
     # Singapore is the closest free Render region to the Supabase project (ap-southeast-2 / Sydney).
