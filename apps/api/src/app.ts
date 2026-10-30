@@ -54,6 +54,10 @@ export function createApp(dependencies: AppDependencies): Express {
       "X-Content-Type-Options": "nosniff",
       "Referrer-Policy": "strict-origin-when-cross-origin",
       "X-Frame-Options": "DENY",
+      // HTTPS در production اجباری است؛ مرورگر بعد از اولین بازدید همیشه HTTPS را امتحان می‌کند.
+      ...(secureCookie
+        ? { "Strict-Transport-Security": "max-age=31536000; includeSubDomains" }
+        : {}),
     });
     next();
   });

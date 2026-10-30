@@ -5,7 +5,7 @@ import type { AuthRepository, NewUser, Session, User } from "../domain/auth.js";
 import { createApp } from "../app.js";
 
 // این harness بدون PostgreSQL کار می‌کند و همان contract repository را پیاده می‌کند.
-function createHarness(options: { withMailer?: boolean } = {}) {
+function createHarness(options: { withMailer?: boolean; nodeEnv?: "test" | "production" } = {}) {
   const users = new Map<string, User>();
   const sessions = new Map<string, Session>();
   const resets = new Map<string, { userId: string; expiresAt: Date }>();
@@ -115,7 +115,7 @@ function createHarness(options: { withMailer?: boolean } = {}) {
   };
 
   const app = createApp({
-    config: { nodeEnv: "test", webOrigin: "http://localhost:5173" },
+    config: { nodeEnv: options.nodeEnv ?? "test", webOrigin: "http://localhost:5173" },
     auth: {
       repository,
       appUrl: "https://dara.example",
@@ -187,6 +187,23 @@ describe("username and password authentication", () => {
     });
     expect(signIn.status).toBe(200);
     expect(signIn.body.user.username).toBe("no_mail");
+  });
+
+  it("sends HSTS and secure HttpOnly session cookies when NODE_ENV is production", async () => {
+    const harness = createHarness({ nodeEnv: "production" });
+
+    const registration = await register(harness.app, validAccount);
+    expect(registration.status).toBe(201);
+    expect(registration.headers["strict-transport-security"]).toBe(
+      "max-age=31536000; includeSubDomains",
+    );
+
+    const header = registration.headers["set-cookie"];
+    const cookie = Array.isArray(header) ? header[0]! : String(header ?? "");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("SameSite=None");
+    expect(cookie).toMatch(/Max-Age=\d+/);
   });
 
   it("treats usernames case-insensitively and rejects a duplicate", async () => {

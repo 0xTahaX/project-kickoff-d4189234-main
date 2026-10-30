@@ -16,6 +16,17 @@ async function start(): Promise<void> {
   await prisma.$connect();
   const repository = new PrismaAuthRepository(prisma);
   await repository.deleteExpired(new Date());
+  // پاک‌سازی نشست/توکن منقضی فقط هنگام راه‌اندازی کافی نیست؛ در سرور همیشه‌روشن هر شش ساعت تکرار می‌شود.
+  setInterval(
+    () => {
+      void repository.deleteExpired(new Date()).catch((error: unknown) => {
+        console.error("Expired session cleanup failed:", {
+          name: error instanceof Error ? error.name : "UnknownError",
+        });
+      });
+    },
+    6 * 60 * 60 * 1000,
+  ).unref();
   const mailer =
     config.smtpHost && config.smtpFrom
       ? createTransport({

@@ -3,7 +3,9 @@ services:
     name: dara
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build:all
+    # NODE_ENV=production makes npm omit devDependencies; the build needs tsc, prisma and vite,
+    # so dev dependencies must be installed explicitly. Runtime also needs the prisma CLI for migrate deploy.
+    buildCommand: npm ci --include=dev && npm run build:all
     startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
     autoDeploy: true
