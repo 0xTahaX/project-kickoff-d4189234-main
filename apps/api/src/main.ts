@@ -3,7 +3,7 @@ import { readConfig } from "./config/env.js";
 import { createDatabaseClient } from "./database/client.js";
 import { PrismaAuthRepository } from "./database/prisma-auth.repository.js";
 import { PrismaFinanceRepository } from "./finance/finance.repository.js";
-import { createTransport } from "nodemailer";
+import { createMailer } from "./mail/index.js";
 
 // نقطهٔ ورود تنها جای ساخت کلاینت دیتابیس، SMTP و listener است.
 async function start(): Promise<void> {
@@ -27,23 +27,22 @@ async function start(): Promise<void> {
     },
     6 * 60 * 60 * 1000,
   ).unref();
-  const mailer =
-    config.smtpHost && config.smtpFrom
-      ? createTransport({
-          host: config.smtpHost,
-          port: config.smtpPort,
-          secure: config.smtpSecure,
-          ...(config.smtpUser && config.smtpPassword
-            ? { auth: { user: config.smtpUser, pass: config.smtpPassword } }
-            : {}),
-        })
-      : null;
-  // ثبت‌نام و ورود با نام کاربری به SMTP نیاز ندارند؛ فقط بازیابی گذرواژه به ایمیل وابسته است.
-  if (!mailer) console.warn("SMTP is not configured; password reset emails are disabled.");
+  const mailer = createMailer({
+    smtpPort: config.smtpPort,
+    smtpSecure: config.smtpSecure,
+    ...(config.mailFrom ? { mailFrom: config.mailFrom } : {}),
+    ...(config.brevoApiKey ? { brevoApiKey: config.brevoApiKey } : {}),
+    ...(config.smtpHost ? { smtpHost: config.smtpHost } : {}),
+    ...(config.smtpUser ? { smtpUser: config.smtpUser } : {}),
+    ...(config.smtpPassword ? { smtpPassword: config.smtpPassword } : {}),
+  });
+  // ثبت‌نام و ورود با نام کاربری به ایمیل نیاز ندارند؛ فقط بازیابی گذرواژه به ترابری ایمیل وابسته است.
+  if (!mailer)
+    console.warn("No e-mail transport configured (BREVO_API_KEY or SMTP); password reset e-mails are disabled.");
 
   const app = createApp({
     config,
-    auth: { repository, appUrl: config.appUrl, mailer, mailFrom: config.smtpFrom },
+    auth: { repository, appUrl: config.appUrl, mailer, mailFrom: config.mailFrom },
     finance: new PrismaFinanceRepository(prisma),
     databaseHealth: async () => {
       await prisma.$queryRaw`SELECT NOW()`;

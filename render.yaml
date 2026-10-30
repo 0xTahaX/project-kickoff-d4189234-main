@@ -20,15 +20,9 @@ services:
         value: 5
       - key: DATABASE_SSL_CA_FILE
         sync: false
-      - key: SMTP_HOST
+      # Render Free blocks outbound SMTP (ports 25/465/587), so password-reset e-mail is sent
+      # through the Brevo HTTPS API instead. See .env.example for how to obtain the API key.
+      - key: BREVO_API_KEY
         sync: false
-      - key: SMTP_PORT
-        value: 587
-      - key: SMTP_SECURE
-        value: "false"
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
-      - key: SMTP_FROM
+      - key: MAIL_FROM
         sync: false

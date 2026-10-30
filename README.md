@@ -23,7 +23,7 @@
 
 3. PostgreSQL را نصب/راه‌اندازی کنید یا برای Supabase از صفحهٔ **Connect** رشتهٔ اتصال را بگیرید. برای کامپیوتری که فقط IPv4 دارد، از Session Pooler استفاده کنید؛ رشته را فقط در `DATABASE_URL` داخل `.env` ریشه قرار دهید. اگر رمز نویسه‌های رزروشده مثل `+`, `#`, `?`, `&` یا فاصله دارد، آن‌ها را در بخش رمز URL-encode کنید. `.env` نباید commit شود. برای Supabase گواهی رسمی را از **Database Settings → SSL Configuration → Download certificate** بگیرید، فایل را خارج از repository نگه دارید و مسیر مطلق آن را در `DATABASE_SSL_CA_FILE` تنظیم کنید. API اعتبار گواهی و نام میزبان را با TLS بررسی می‌کند؛ Prisma CLI نیز TLS اجباری و بررسی سخت‌گیرانهٔ گواهی را فعال می‌کند. هیچ‌گاه بررسی گواهی را غیرفعال نکنید.
 
-   ثبت‌نام و ورود به SMTP نیاز ندارند؛ فقط بازیابی گذرواژه به ایمیل وابسته است. برای فعال‌کردن آن `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` و `SMTP_FROM` را از ارائه‌دهندهٔ ایمیل خود تنظیم کنید؛ فرستنده باید نزد آن ارائه‌دهنده تأیید شده باشد. برای لینک‌های محلی، `APP_URL=http://localhost:5173` است. بدون SMTP، مسیر بازیابی گذرواژه با خطای روشن `EMAIL_NOT_CONFIGURED` پاسخ می‌دهد، اما ثبت‌نام و ورود کار می‌کنند. ایمیل در فرم ثبت‌نام اختیاری است و فقط برای همان بازیابی استفاده می‌شود.
+   ثبت‌نام و ورود به ایمیل نیاز ندارند؛ فقط بازیابی گذرواژه به آن وابسته است. **در Render Free پورت‌های SMTP (25/465/587) مسدود هستند**، بنابراین در production از API روی HTTPS استفاده می‌شود: `BREVO_API_KEY` (حساب رایگان Brevo) و `MAIL_FROM` (نشانی فرستندهٔ تأییدشده). جزئیات دریافت کلید در [.env.example](./.env.example) آمده است. برای توسعهٔ محلی یا میزبانی که SMTP را باز می‌گذارد، همان `SMTP_HOST`/`SMTP_PORT`/`SMTP_SECURE`/`SMTP_USER`/`SMTP_PASS`/`SMTP_FROM` کار می‌کند و `MAIL_FROM` در صورت خالی‌بودن از `SMTP_FROM` خوانده می‌شود. بدون هیچ ترابری، مسیر بازیابی گذرواژه با خطای روشن `EMAIL_NOT_CONFIGURED` پاسخ می‌دهد، اما ثبت‌نام و ورود کار می‌کنند. ایمیل در فرم ثبت‌نام اختیاری است و فقط برای همان بازیابی استفاده می‌شود.
 
    در Supabase فقط وقتی هزینه صفر تضمین می‌شود که **Organization روی Free plan** باشد و سهمیه‌ها رعایت شوند؛ Nano بودن compute به‌تنهایی تضمین کافی نیست، چون در Organization پولی Nano هم هزینه دارد. طبق مستندات فعلی Supabase، Free شامل حداکثر دو پروژهٔ فعال، ۵۰۰ مگابایت دیتابیس برای هر پروژه، ۵ گیگابایت egress و ۱ گیگابایت storage است؛ پروژه پس از یک هفته بی‌فعالیتی ممکن است pause شود و backup خودکار در دسترس نیست. این طرح برای توسعه مناسب است، اما برای دسترس‌پذیری production یا بازیابی داده تضمین کافی نمی‌دهد. هیچ ارتقا یا قابلیت پولی را فعال نکنید.
 
@@ -105,8 +105,11 @@ npm.cmd run test:e2e
 همهٔ نام‌ها و نمونه‌های امن در [.env.example](./.env.example) هستند:
 
 - `DATABASE_URL`: اتصال PostgreSQL.
+- `DATABASE_SSL_CA_FILE`: مسیر مطلق گواهی CA برای Supabase (خارج از repository).
 - `PORT`: پورت API، پیش‌فرض `3001`.
 - `WEB_ORIGIN`: مبدأ مجاز مرورگر و بررسی CSRF.
+- `BREVO_API_KEY` و `MAIL_FROM`: ارسال ایمیل بازیابی گذرواژه از طریق API روی HTTPS (برای Render Free).
+- `SMTP_*`: ترابری جایگزین برای توسعهٔ محلی یا میزبانی که SMTP را باز می‌گذارد.
 
 مقادیر واقعی را فقط در `.env` محلی یا secret manager استقرار قرار دهید؛ `.env` در Git نادیده گرفته می‌شود.
 
@@ -135,7 +138,7 @@ npm.cmd run test:e2e
 1. مخزن را در GitHub قرار دهید و در Render گزینهٔ **New → Blueprint** را برای مخزن انتخاب کنید.
 2. در Supabase یک پروژه با **Organization روی Free plan** بسازید؛ از **Connect** رشتهٔ اتصال PostgreSQL را بردارید. برای سازگاری شبکه از Session Pooler استفاده کنید.
 3. فایل CA رسمی Supabase را در Render بخش **Environment → Secret Files** با نام `supabase-prod-ca-2021.crt` بارگذاری کنید و `DATABASE_SSL_CA_FILE` را روی `/etc/secrets/supabase-prod-ca-2021.crt` بگذارید.
-4. مقدارهای `DATABASE_URL` را در Environment سرویس Render وارد کنید. تنظیمات SMTP فقط برای بازیابی گذرواژه لازم است و بدون آن ثبت‌نام/ورود کار می‌کند. `APP_URL` در صورت خالی‌بودن از `RENDER_EXTERNAL_URL` Render گرفته می‌شود.
+4. مقدارهای `DATABASE_URL` و `DATABASE_SSL_CA_FILE` را در Environment سرویس Render وارد کنید. برای ایمیل بازیابی گذرواژه، `BREVO_API_KEY` و `MAIL_FROM` را بگذارید (SMTP روی پلن Free مسدود است). `APP_URL` در صورت خالی‌بودن از `RENDER_EXTERNAL_URL` Render گرفته می‌شود.
 5. Render migrationهای ثبت‌شده را هنگام شروع سرویس اعمال می‌کند و `/api/health` را بررسی می‌کند. پس از Deploy، دامنهٔ نمایش‌داده‌شده در داشبورد Render را باز کنید و در مرورگر ثبت‌نام و ورود با نام کاربری را بیازمایید.
 6. برای درخواست ایندکس رایگان، دامنه را در [Google Search Console](https://search.google.com/search-console/) ثبت و از URL Inspection درخواست crawl کنید. ایندکس‌شدن و رتبه تضمینی یا فوری نیست.
 

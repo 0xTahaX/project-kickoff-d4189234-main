@@ -32,6 +32,10 @@ const environmentSchema = z.object({
   SMTP_USER: optionalValue,
   SMTP_PASS: optionalValue,
   SMTP_FROM: optionalValue,
+  // ارسال از طریق API روی HTTPS؛ مسیر پیشنهادی چون Render Free پورت‌های SMTP را می‌بندد.
+  BREVO_API_KEY: optionalValue,
+  // نشانی فرستنده برای هر دو ترابری؛ اگر خالی باشد از SMTP_FROM استفاده می‌شود.
+  MAIL_FROM: optionalValue,
 }).superRefine((value, context) => {
   if (Boolean(value.SMTP_USER) !== Boolean(value.SMTP_PASS)) {
     context.addIssue({
@@ -55,7 +59,8 @@ export type AppConfig = {
   smtpSecure: boolean;
   smtpUser?: string;
   smtpPassword?: string;
-  smtpFrom?: string;
+  brevoApiKey?: string;
+  mailFrom?: string;
 };
 
 // اعتبارسنجی متغیرهای محیطی هنگام راه‌اندازی، خطاهای پیکربندی را زود و واضح گزارش می‌کند.
@@ -67,6 +72,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   const value = result.data;
   const appUrl = value.APP_URL ?? value.RENDER_EXTERNAL_URL ?? "http://localhost:5173";
+  const mailFrom = value.MAIL_FROM ?? value.SMTP_FROM;
   return {
     nodeEnv: value.NODE_ENV,
     port: value.PORT,
@@ -82,6 +88,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     smtpSecure: value.SMTP_SECURE,
     ...(value.SMTP_USER ? { smtpUser: value.SMTP_USER } : {}),
     ...(value.SMTP_PASS ? { smtpPassword: value.SMTP_PASS } : {}),
-    ...(value.SMTP_FROM ? { smtpFrom: value.SMTP_FROM } : {}),
+    ...(value.BREVO_API_KEY ? { brevoApiKey: value.BREVO_API_KEY } : {}),
+    ...(mailFrom ? { mailFrom } : {}),
   };
 }
