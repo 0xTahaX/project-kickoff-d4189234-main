@@ -1,11 +1,39 @@
 import { z } from "zod";
+import {
+  normalizeUsername,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+  USERNAME_PATTERN,
+} from "./username.js";
 
+// ایمیل اختیاری است و فقط برای بازیابی گذرواژه استفاده می‌شود؛ ورود به آن وابسته نیست.
 const email = z
   .string()
   .trim()
   .email("قالب ایمیل درست نیست.")
   .max(254, "ایمیل بیش از اندازه طولانی است.")
   .transform((value) => value.toLowerCase());
+const optionalEmail = z.preprocess(
+  (value) => (value === "" || value === null ? undefined : value),
+  email.optional(),
+);
+// نام کاربری ورود (= ثبت‌نام) همیشه یکسان‌سازی می‌شود تا بزرگی/کوچکی حرف و «ی/ک» عربی
+// حساب دیگری نسازد.
+const username = z
+  .string({ error: "نام کاربری را وارد کنید." })
+  .transform(normalizeUsername)
+  .refine(
+    (value) => value.length >= USERNAME_MIN_LENGTH,
+    `نام کاربری باید حداقل ${USERNAME_MIN_LENGTH} کاراکتر باشد.`,
+  )
+  .refine(
+    (value) => value.length <= USERNAME_MAX_LENGTH,
+    `نام کاربری نمی‌تواند بیشتر از ${USERNAME_MAX_LENGTH} کاراکتر باشد.`,
+  )
+  .refine(
+    (value) => USERNAME_PATTERN.test(value),
+    "نام کاربری باید با حرف شروع شود و فقط شامل حرف، عدد، نقطه، خط تیره و زیرخط باشد.",
+  );
 const password = z
   .string()
   .min(10, "گذرواژه باید حداقل ۱۰ کاراکتر باشد.")
@@ -23,10 +51,11 @@ const optionalName = z
 // هر مسیر قرارداد ورودی جداگانه دارد تا فیلدهای اضافی و mass assignment رد شوند.
 export const registerSchema = z
   .object({
-    first_name: name,
+    first_name: optionalName,
     last_name: optionalName,
-    email,
+    username,
     password,
+    email: optionalEmail,
     accepted_terms: z.literal(true, {
       error: "برای ادامه باید شرایط را بپذیرید.",
     }),
@@ -35,22 +64,28 @@ export const registerSchema = z
 
 export const loginSchema = z
   .object({
-    email,
-    password: z.string().min(1).max(128),
+    username,
+    password: z
+      .string({ error: "گذرواژه را وارد کنید." })
+      .min(1, "گذرواژه را وارد کنید.")
+      .max(128),
     remember: z.boolean().optional().default(false),
   })
   .strict();
 
 export const forgotPasswordSchema = z.object({ email }).strict();
-export const verifyEmailSchema = z.object({ token: z.string().min(32).max(128) }).strict();
-export const resendVerificationSchema = z.object({ email }).strict();
 export const resetPasswordSchema = z
   .object({ token: z.string().min(32).max(128), new_password: password })
   .strict();
 export const changePasswordSchema = z
-  .object({ current_password: z.string().min(1).max(128), new_password: password })
+  .object({
+    current_password: z.string({ error: "گذرواژه را وارد کنید." }).min(1).max(128),
+    new_password: password,
+  })
   .strict();
-export const deleteAccountSchema = z.object({ password: z.string().min(1).max(128) }).strict();
+export const deleteAccountSchema = z
+  .object({ password: z.string({ error: "گذرواژه را وارد کنید." }).min(1).max(128) })
+  .strict();
 
 // تبدیل نام‌های فرم قدیمی به نام‌های داخلی whitelist شده، بدون پذیرش فیلدهای دیگر.
 export const profileSchema = z

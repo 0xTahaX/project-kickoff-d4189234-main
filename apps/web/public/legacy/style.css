@@ -571,3 +571,35 @@ nav a {
 .phase5-import-review button + button {
   margin-inline-start: 8px;
 }
+
+/* ورود و ثبت‌نام با نام کاربری */
+.auth-page {
+  max-width: 520px;
+  margin-inline: auto;
+}
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 10px;
+}
+.auth-tabs button {
+  flex: 1 1 0;
+}
+.auth-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--g);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.auth-google {
+  margin-top: 10px;
+  width: 100%;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.auth-panel .card > p:last-child {
+  margin-bottom: 0;
+}

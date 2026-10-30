@@ -8,10 +8,10 @@ import { createFinanceRouter } from "./routes.js";
 
 const user: User = {
   id: "11111111-1111-4111-8111-111111111111",
+  username: "dara_user",
   firstName: "Dara",
   lastName: "",
   email: "user@example.com",
-  emailVerifiedAt: new Date("2026-01-01T00:00:00.000Z"),
   passwordHash: "",
   passwordSalt: "",
   preferredLanguage: "fa",

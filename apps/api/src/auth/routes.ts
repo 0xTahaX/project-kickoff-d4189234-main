@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Router, type Response } from "express";
+import { Router, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import type { SendMailOptions } from "nodemailer";
 import type { AuthRepository, ProfileUpdate, User } from "../domain/auth.js";
@@ -12,9 +12,7 @@ import {
   loginSchema,
   profileSchema,
   registerSchema,
-  resendVerificationSchema,
   resetPasswordSchema,
-  verifyEmailSchema,
 } from "./schemas.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { hashToken, createOpaqueToken } from "./tokens.js";
@@ -39,7 +37,6 @@ export interface AuthRouteOptions {
 const SHORT_SESSION_MS = 12 * 60 * 60 * 1000;
 const REMEMBER_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const RESET_TOKEN_MS = 60 * 60 * 1000;
-const VERIFICATION_TOKEN_MS = 24 * 60 * 60 * 1000;
 
 // محدودیت‌ها برای یک سرور تک‌نمونه‌ای هستند؛ تولید چندنمونه‌ای به store مشترک نیاز دارد.
 function authRateLimit(limit: number, windowMs: number) {
@@ -60,10 +57,10 @@ function authRateLimit(limit: number, windowMs: number) {
 function publicUser(user: User) {
   return {
     id: user.id,
+    username: user.username,
     first_name: user.firstName,
     last_name: user.lastName,
     email: user.email,
-    email_verified: user.emailVerifiedAt !== null,
     preferred_language: user.preferredLanguage,
     primary_currency: user.primaryCurrency,
     created_at: user.createdAt.toISOString(),
@@ -99,6 +96,30 @@ function clearSessionCookie(response: Response, secure: boolean) {
   response.setHeader("Set-Cookie", `${SESSION_COOKIE}=; ${flags.join("; ")}`);
 }
 
+// نشست تازه می‌سازد و کوکی HttpOnly آن را تنظیم می‌کند؛ هم ثبت‌نام و هم ورود از آن استفاده می‌کنند.
+async function startSession(
+  repository: AuthRepository,
+  request: Request,
+  response: Response,
+  user: User,
+  remember: boolean,
+  secureCookie: boolean,
+): Promise<void> {
+  // نشست قبلی همین مرورگر دور ریخته می‌شود تا توکن قدیمی معتبر نماند.
+  if (request.authSession) await repository.deleteSession(request.authSession.tokenHash);
+  const token = createOpaqueToken();
+  const now = new Date();
+  const duration = remember ? REMEMBER_SESSION_MS : SHORT_SESSION_MS;
+  await repository.createSession({
+    tokenHash: hashToken(token),
+    userId: user.id,
+    createdAt: now,
+    expiresAt: new Date(now.getTime() + duration),
+    userAgent: String(request.get("User-Agent") || "").slice(0, 300),
+  });
+  setSessionCookie(response, token, duration, secureCookie);
+}
+
 // مسیرهای احراز هویت فقط دادهٔ اعتبارسنجی‌شده را وارد سرویس ذخیره‌سازی می‌کنند.
 export function createAuthRouter(options: AuthRouteOptions): Router {
   const { repository, config, mailer, mailFrom } = options;
@@ -110,64 +131,30 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     authRateLimit(10, 60 * 60 * 1000),
     validateBody(registerSchema),
     async (request, response) => {
-      if (!mailer || !mailFrom)
-        throw new ApiError(
-          503,
-          "EMAIL_NOT_CONFIGURED",
-          "ارسال ایمیل تأیید در تنظیمات سرور فعال نشده است.",
-        );
       const body = request.body as ReturnType<typeof registerSchema.parse>;
+      // بررسی پیش از درج، پیام روشن می‌دهد؛ یکتایی واقعی را index دیتابیس تضمین می‌کند.
+      if (await repository.findUserByUsername(body.username))
+        throw new ApiError(
+          409,
+          "USERNAME_IN_USE",
+          "این نام کاربری قبلاً گرفته شده است.",
+          { username: "این نام کاربری قبلاً گرفته شده است." },
+        );
       const credential = await hashPassword(body.password);
-      const now = new Date();
       const user = await repository.createUser({
         id: randomUUID(),
-        firstName: body.first_name,
+        username: body.username,
+        firstName: body.first_name || body.username,
         lastName: body.last_name,
-        email: body.email,
+        email: body.email ?? null,
         ...credential,
-        acceptedTermsAt: now,
+        acceptedTermsAt: new Date(),
       });
-      await sendVerificationEmail(repository, mailer, mailFrom, config.appUrl, user);
+      // تأیید ایمیل بخشی از ثبت‌نام نیست؛ حساب بلافاصله فعال و وارد می‌شود.
+      await startSession(repository, request, response, user, false, secureCookie);
       response.status(201).json({
-        message: "حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید.",
-      });
-    },
-  );
-
-  router.post(
-    "/verify-email",
-    authRateLimit(20, 60 * 60 * 1000),
-    validateBody(verifyEmailSchema),
-    async (request, response) => {
-      const { token } = request.body as ReturnType<typeof verifyEmailSchema.parse>;
-      const user = await repository.consumeEmailVerification(hashToken(token), new Date());
-      if (!user)
-        throw new ApiError(
-          400,
-          "INVALID_VERIFICATION_TOKEN",
-          "لینک تأیید معتبر نیست یا زمان آن گذشته است.",
-        );
-      response.json({ message: "ایمیل تأیید شد. اکنون می‌توانید وارد شوید." });
-    },
-  );
-
-  router.post(
-    "/resend-verification",
-    authRateLimit(5, 60 * 60 * 1000),
-    validateBody(resendVerificationSchema),
-    async (request, response) => {
-      if (!mailer || !mailFrom)
-        throw new ApiError(
-          503,
-          "EMAIL_NOT_CONFIGURED",
-          "ارسال ایمیل تأیید در تنظیمات سرور فعال نشده است.",
-        );
-      const { email } = request.body as ReturnType<typeof resendVerificationSchema.parse>;
-      const user = await repository.findUserByEmail(email);
-      if (user && !user.emailVerifiedAt)
-        await sendVerificationEmail(repository, mailer, mailFrom, config.appUrl, user);
-      response.json({
-        message: "اگر حساب تأییدنشده‌ای با این ایمیل وجود داشته باشد، لینک تازه ارسال می‌شود.",
+        message: "حساب ساخته شد و وارد شدید.",
+        user: publicUser(user),
       });
     },
   );
@@ -178,28 +165,11 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     validateBody(loginSchema),
     async (request, response) => {
       const body = request.body as ReturnType<typeof loginSchema.parse>;
-      const user = await repository.findUserByEmail(body.email);
+      const user = await repository.findUserByUsername(body.username);
       if (!user || !(await verifyPassword(body.password, user)))
-        throw new ApiError(401, "INVALID_CREDENTIALS", "ایمیل یا گذرواژه درست نیست.");
-      if (!user.emailVerifiedAt)
-        throw new ApiError(
-          403,
-          "EMAIL_NOT_VERIFIED",
-          "برای ورود ابتدا ایمیل خود را تأیید کنید.",
-        );
+        throw new ApiError(401, "INVALID_CREDENTIALS", "نام کاربری یا گذرواژه درست نیست.");
 
-      if (request.authSession) await repository.deleteSession(request.authSession.tokenHash);
-      const token = createOpaqueToken();
-      const now = new Date();
-      const duration = body.remember ? REMEMBER_SESSION_MS : SHORT_SESSION_MS;
-      await repository.createSession({
-        tokenHash: hashToken(token),
-        userId: user.id,
-        createdAt: now,
-        expiresAt: new Date(now.getTime() + duration),
-        userAgent: String(request.get("User-Agent") || "").slice(0, 300),
-      });
-      setSessionCookie(response, token, duration, secureCookie);
+      await startSession(repository, request, response, user, body.remember, secureCookie);
       response.json({ user: publicUser(user) });
     },
   );
@@ -217,7 +187,7 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
         );
       const body = request.body as ReturnType<typeof forgotPasswordSchema.parse>;
       const user = await repository.findUserByEmail(body.email);
-      if (user) {
+      if (user && user.email) {
         const token = createOpaqueToken();
         await repository.createPasswordReset(
           hashToken(token),
@@ -306,39 +276,6 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
 
   router.get("/health", (_request, response) => response.json({ status: "ok" }));
   return router;
-}
-
-async function sendVerificationEmail(
-  repository: AuthRepository,
-  mailer: Mailer,
-  mailFrom: string,
-  appUrl: string,
-  user: User,
-): Promise<void> {
-  const token = createOpaqueToken();
-  const tokenHash = hashToken(token);
-  await repository.createEmailVerification(
-    tokenHash,
-    user.id,
-    new Date(Date.now() + VERIFICATION_TOKEN_MS),
-  );
-  const link = `${appUrl}/legacy/index.html?verify=${encodeURIComponent(token)}`;
-  try {
-    await mailer.sendMail({
-      from: mailFrom,
-      to: user.email,
-      subject: "تأیید ایمیل حساب دارا",
-      text: `برای فعال‌کردن حساب دارا، این لینک را تا ۲۴ ساعت آینده باز کنید:\n${link}`,
-      html: `<p>برای فعال‌کردن حساب دارا، لینک زیر را تا ۲۴ ساعت آینده باز کنید:</p><p><a href="${link}">تأیید ایمیل</a></p>`,
-    });
-  } catch {
-    await repository.deleteEmailVerification(tokenHash);
-    throw new ApiError(
-      502,
-      "EMAIL_DELIVERY_FAILED",
-      "حساب در انتظار تأیید ساخته شد، اما ایمیل ارسال نشد. از ارسال دوبارهٔ لینک استفاده کنید.",
-    );
-  }
 }
 
 export function createProfileRouter(

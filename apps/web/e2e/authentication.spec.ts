@@ -19,34 +19,67 @@ test("the legacy account page opens auth and exposes the guest dashboard", async
   await expect(page.getByRole("button", { name: "تراکنش‌ها" })).toBeVisible();
 });
 
-test("registration and email verification are connected to the authentication API", async ({ page }) => {
+test("registration and username login are connected to the authentication API", async ({ page }) => {
+  let registration: { username?: string; email?: string; first_name?: string } | null = null;
   await page.route("**/api/me", (route) =>
     route.fulfill({ status: 401, json: { code: "UNAUTHORIZED", message: "وارد نشده‌اید." } }),
   );
-  await page.route("**/api/auth/register", (route) =>
+  await page.route("**/api/auth/register", (route) => {
+    registration = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { message: "حساب ساخته شد و وارد شدید." } });
+  });
+  await page.route("**/api/auth/login", (route) =>
     route.fulfill({
-      status: 201,
-      json: { message: "حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید." },
+      status: 401,
+      json: { code: "INVALID_CREDENTIALS", message: "نام کاربری یا گذرواژه درست نیست." },
     }),
-  );
-  await page.route("**/api/auth/verify-email", (route) =>
-    route.fulfill({ status: 200, json: { message: "ایمیل تأیید شد. اکنون می‌توانید وارد شوید." } }),
   );
 
   await page.goto("/");
-  await page.getByLabel("نام", { exact: true }).fill("آزمایشی");
-  await page.getByLabel("ایمیل", { exact: true }).last().fill("test@example.com");
-  await page
-    .getByLabel("گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)")
-    .fill("securepass123");
-  await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "ساخت حساب" }).click();
-  await expect(page.getByText("حساب ساخته شد. برای فعال‌کردن آن، ایمیل خود را بررسی کنید."))
-    .toBeVisible();
+  await page.getByRole("button", { name: "ثبت‌نام" }).click();
 
-  await page.goto("/legacy/index.html?verify=test-token-that-is-long-enough-1234567890");
-  await page.getByRole("button", { name: "تأیید ایمیل و ادامه" }).click();
-  await expect(page.getByText("ایمیل تأیید شد. اکنون می‌توانید وارد شوید.")).toBeVisible();
+  const panel = page.locator(".auth-panel");
+  await panel.getByLabel("نام نمایشی (اختیاری)").fill("آزمایشی");
+  await panel.getByLabel("نام کاربری", { exact: true }).fill("Dara_User");
+  await panel.getByLabel("گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)").fill("securepass123");
+  await panel.getByLabel("تکرار گذرواژه").fill("securepass123");
+  await panel.getByLabel("ایمیل برای بازیابی گذرواژه (اختیاری)").fill("test@example.com");
+  await panel.getByRole("checkbox").check();
+
+  const registrationRequest = page.waitForRequest("**/api/auth/register");
+  await panel.getByRole("button", { name: "ساخت حساب" }).click();
+  registration = (await registrationRequest).postDataJSON();
+  expect(registration).toMatchObject({
+    username: "Dara_User",
+    email: "test@example.com",
+    first_name: "آزمایشی",
+  });
+
+  // پاسخ ثبت‌نام نشست می‌سازد و صفحه دوباره بارگذاری می‌شود؛ اینجا /api/me همچنان 401 است.
+  await expect(page.getByRole("heading", { name: "ورود به دارا" })).toBeVisible();
+
+  const loginForm = page.locator("form");
+  await loginForm.getByLabel("نام کاربری", { exact: true }).fill("dara_user");
+  await loginForm.getByLabel("گذرواژه", { exact: true }).fill("wrongpass123");
+  await loginForm.getByRole("button", { name: "ورود" }).click();
+  await expect(page.getByText("نام کاربری یا گذرواژه درست نیست.")).toBeVisible();
+});
+
+test("the registration form refuses a mismatched password confirmation", async ({ page }) => {
+  await page.route("**/api/me", (route) =>
+    route.fulfill({ status: 401, json: { code: "UNAUTHORIZED", message: "وارد نشده‌اید." } }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "ثبت‌نام" }).click();
+
+  const panel = page.locator(".auth-panel");
+  await panel.getByLabel("نام کاربری", { exact: true }).fill("dara_user");
+  await panel.getByLabel("گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)").fill("securepass123");
+  await panel.getByLabel("تکرار گذرواژه").fill("securepass124");
+  await panel.getByRole("checkbox").check();
+  await panel.getByRole("button", { name: "ساخت حساب" }).click();
+
+  await expect(page.getByText("گذرواژهٔ دوم با گذرواژهٔ اول یکسان نیست.")).toBeVisible();
 });
 
 test("guest users can record an asset and track an investment holding", async ({ page }) => {

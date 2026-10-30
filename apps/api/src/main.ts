@@ -27,8 +27,8 @@ async function start(): Promise<void> {
             : {}),
         })
       : null;
-  if (config.nodeEnv === "production" && !mailer)
-    throw new Error("SMTP_HOST و SMTP_FROM برای احراز ایمیل در production الزامی هستند.");
+  // ثبت‌نام و ورود با نام کاربری به SMTP نیاز ندارند؛ فقط بازیابی گذرواژه به ایمیل وابسته است.
+  if (!mailer) console.warn("SMTP is not configured; password reset emails are disabled.");
 
   const app = createApp({
     config,

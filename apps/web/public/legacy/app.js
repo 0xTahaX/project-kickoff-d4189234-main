@@ -398,7 +398,43 @@ async function cloudBoot() {
     R();
   }
 }
-const authPage = () => {
+// ورود با نام کاربری و گذرواژه است؛ ورود Google بعداً به همین کارت اضافه می‌شود.
+const googleButton = () =>
+  `<button class="b auth-google" type="button" disabled title="به‌زودی">ورود با Google (به‌زودی)</button>`;
+const authNotice = () =>
+  Cloud.authNotice
+    ? `<p class="phase5-status" role="status">${E(Cloud.authNotice)}</p>`
+    : "";
+const authTabs = () =>
+  `<p class=auth-tabs><button type=button class="${Cloud.authMode === "login" ? "pri" : "b"}" onclick="A.authMode('login')">ورود</button> <button type=button class="${Cloud.authMode === "register" ? "pri" : "b"}" onclick="A.authMode('register')">ثبت‌نام</button></p>`;
+const loginForm = () => card(
+  "ورود",
+  `<form onsubmit="A.login(event)">
+    <label>نام کاربری<input name=username autocomplete=username autocapitalize=none spellcheck=false minlength=3 maxlength=32 required></label>
+    <label>گذرواژه<input name=password type=password autocomplete=current-password required></label>
+    <label class=phase5-check><input name=remember type=checkbox checked> مرا به خاطر بسپار</label>
+    <p class=err id=le role=alert></p>
+    <button class=pri>ورود</button>
+  </form>
+  <p class=mu><button type=button class=auth-link onclick="A.authMode('forgot')">گذرواژه را فراموش کرده‌ام</button></p>
+  ${googleButton()}`,
+);
+const registerForm = () => card(
+  "ساخت حساب",
+  `<form onsubmit="A.register(event)">
+    <label>نام نمایشی (اختیاری)<input name=first_name autocomplete=nickname maxlength=50></label>
+    <label>نام کاربری<input name=username autocomplete=username autocapitalize=none spellcheck=false minlength=3 maxlength=32 required></label>
+    <p class=mu>با حرف شروع شود؛ حرف، عدد، نقطه، خط تیره و زیرخط مجاز است.</p>
+    <label>گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)<input name=password type=password autocomplete=new-password minlength=10 required></label>
+    <label>تکرار گذرواژه<input name=confirm type=password autocomplete=new-password minlength=10 required></label>
+    <label>ایمیل برای بازیابی گذرواژه (اختیاری)<input name=email type=email autocomplete=email maxlength=254></label>
+    <label class=phase5-check><input name=accepted_terms type=checkbox required> <a href="/terms" target=_blank>شرایط استفاده</a> را می‌پذیرم</label>
+    <p class=err id=re role=alert></p>
+    <button class=pri>ساخت حساب</button>
+  </form>
+  ${googleButton()}`,
+);
+const authPageBody = () => {
   if (Cloud.status === "loading")
     return card("دارا", "<p>در حال بررسی ورود…</p>");
   if (Cloud.status === "offline")
@@ -406,34 +442,25 @@ const authPage = () => {
       "سرور در دسترس نیست",
       `<p>${E(Cloud.err || "ارتباط با سرور برقرار نشد؛ ذخیره‌سازی آنلاین در دسترس نیست.")}</p><button class=b onclick="location.reload()">تلاش دوباره</button> <button class=pri onclick="A.continueAsGuest()">ادامه به عنوان مهمان</button>`,
     );
-  const params = new URLSearchParams(location.search);
-  const verifyToken = params.get("verify");
-  if (verifyToken)
-    return card(
-      "تأیید ایمیل",
-      `<p>برای فعال‌کردن حساب، تأیید ایمیل را انجام دهید.</p><p class=err id=ve></p><button class=pri onclick="A.verifyEmail()">تأیید ایمیل و ادامه</button>`,
-    );
-  const resetToken = params.get("reset");
+  const resetToken = new URLSearchParams(location.search).get("reset");
   if (resetToken)
     return card(
       "تعیین گذرواژهٔ جدید",
-      `<form onsubmit="A.resetPassword(event)"><label>گذرواژهٔ جدید<input name=password type=password autocomplete=new-password minlength=10 required></label><p class=mu>حداقل ۱۰ کاراکتر و شامل حرف و عدد.</p><p class=err id=rp></p><button class=pri>ذخیرهٔ گذرواژه</button></form>`,
+      `<form onsubmit="A.resetPassword(event)"><label>گذرواژهٔ جدید<input name=password type=password autocomplete=new-password minlength=10 required></label><label>تکرار گذرواژهٔ جدید<input name=confirm type=password autocomplete=new-password minlength=10 required></label><p class=mu>حداقل ۱۰ کاراکتر و شامل حرف و عدد.</p><p class=err id=rp role=alert></p><button class=pri>ذخیرهٔ گذرواژه</button></form>`,
     );
   if (Cloud.authMode === "forgot")
     return card(
       "بازیابی گذرواژه",
-      `<p class=mu>اگر حسابی با این ایمیل وجود داشته باشد، لینک بازیابی ارسال می‌شود.</p><form onsubmit="A.forgotPassword(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><p class=err id=fe></p><button class=pri>ارسال لینک</button> <button type=button class=b onclick="A.authMode('login')">بازگشت</button></form>`,
+      `<p class=mu>لینک بازیابی فقط برای حسابی ارسال می‌شود که ایمیل ثبت کرده باشد. اگر بدون ایمیل ثبت‌نام کرده‌اید، از نام کاربری و گذرواژهٔ خود استفاده کنید.</p><form onsubmit="A.forgotPassword(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><p class=err id=fe role=alert></p><button class=pri>ارسال لینک</button> <button type=button class=b onclick="A.authMode('login')">بازگشت</button></form>`,
     );
-  return `<h2>ورود به دارا</h2><p class=mu>پس از تأیید ایمیل، حساب و اطلاعات شما در پایگاه داده ذخیره می‌شوند و با همان حساب از دستگاه‌های دیگر هم قابل دسترسی‌اند.</p><button class=b onclick="A.continueAsGuest()">ادامه بدون حساب (مهمان)</button>${Cloud.authNotice ? `<p class=phase5-status role=status>${E(Cloud.authNotice)}</p>` : ""}${card(
-    "ورود",
-    `<form onsubmit="A.login(event)"><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه<input name=password type=password autocomplete=current-password required></label><p class=err id=le></p><button class=pri>ورود</button> <button type=button class=b onclick="A.authMode('forgot')">فراموشی گذرواژه</button></form><form onsubmit="A.resendVerification(event)"><label>ایمیل برای ارسال دوبارهٔ لینک تأیید<input name=email type=email autocomplete=email required></label><p class=err id=se></p><button class=b>ارسال دوبارهٔ ایمیل تأیید</button></form>`,
-  )}${card(
-    "ثبت‌نام",
-    `<form onsubmit="A.register(event)"><label>نام<input name=first_name autocomplete=given-name required></label><label>نام خانوادگی (اختیاری)<input name=last_name autocomplete=family-name></label><label>ایمیل<input name=email type=email autocomplete=email required></label><label>گذرواژه (حداقل ۱۰ کاراکتر، شامل حرف و عدد)<input name=password type=password autocomplete=new-password minlength=10 required></label><label><input name=accepted_terms type=checkbox required> <a href="/terms" target=_blank>شرایط استفاده</a> را می‌پذیرم</label><p class=err id=re></p><button class=pri>ساخت حساب</button></form>`,
-  )}`;
+  if (Cloud.authMode === "register")
+    return `<h2>ساخت حساب دارا</h2><p class=mu>با نام کاربری و گذرواژه حساب بسازید؛ برای شروع کار به ایمیل نیازی نیست. حساب و اطلاعات شما در پایگاه داده ذخیره می‌شوند و از دستگاه‌های دیگر هم قابل دسترسی‌اند.</p><button class=b onclick="A.continueAsGuest()">ادامه بدون حساب (مهمان)</button>${authNotice()}<div class=auth-panel>${authTabs()}${registerForm()}</div>`;
+  return `<h2>ورود به دارا</h2><p class=mu>با نام کاربری و گذرواژه وارد شوید. حساب و اطلاعات شما در پایگاه داده ذخیره می‌شوند و از دستگاه‌های دیگر هم قابل دسترسی‌اند.</p><button class=b onclick="A.continueAsGuest()">ادامه بدون حساب (مهمان)</button>${authNotice()}<div class=auth-panel>${authTabs()}${loginForm()}</div>`;
 };
-const signedIn = async (email, password) => {
-  await api("POST", "/auth/login", { email, password, remember: true });
+// کل صفحهٔ ورود در یک ستون باریک و وسط‌چین نمایش داده می‌شود.
+const authPage = () => `<div class=auth-page>${authPageBody()}</div>`;
+const signedIn = async (username, password, remember) => {
+  await api("POST", "/auth/login", { username, password, remember });
   window.location.reload();
 };
 const A = {
@@ -454,54 +481,46 @@ const A = {
   },
   login: async (e) => {
     e.preventDefault();
-    const d = Object.fromEntries(new FormData(e.target));
+    const form = e.target;
+    const d = Object.fromEntries(new FormData(form));
+    const button = form.querySelector("button.pri");
+    button.disabled = true;
     try {
-      await signedIn(d.email, d.password);
+      await signedIn(String(d.username || "").trim(), d.password, d.remember === "on");
     } catch (x) {
-      $("le").textContent =
-        x.code === "EMAIL_NOT_VERIFIED"
-          ? `${x.message} از فرم زیر برای ارسال دوبارهٔ لینک استفاده کنید.`
-          : x.message;
+      $("le").textContent = x.message;
+      button.disabled = false;
     }
   },
   register: async (e) => {
     e.preventDefault();
-    const d = Object.fromEntries(new FormData(e.target));
+    const form = e.target;
+    const d = Object.fromEntries(new FormData(form));
+    const password = String(d.password || "");
+    if (password !== d.confirm) {
+      $("re").textContent = "گذرواژهٔ دوم با گذرواژهٔ اول یکسان نیست.";
+      return;
+    }
+    if (!/\p{L}/u.test(password) || !/\p{N}/u.test(password)) {
+      $("re").textContent = "گذرواژه باید شامل حرف و عدد باشد.";
+      return;
+    }
+    const body = {
+      first_name: d.first_name || "",
+      username: String(d.username || "").trim(),
+      password,
+      accepted_terms: d.accepted_terms === "on",
+    };
+    if (d.email) body.email = d.email;
+    const button = form.querySelector("button.pri");
+    button.disabled = true;
     try {
-      const result = await api("POST", "/auth/register", {
-        first_name: d.first_name,
-        last_name: d.last_name || "",
-        email: d.email,
-        password: d.password,
-        accepted_terms: d.accepted_terms === "on",
-      });
-      Cloud.authNotice = result.message;
-      Cloud.authMode = "login";
-      R();
+      // سرور در همان پاسخ نشست را می‌سازد؛ فقط بارگذاری دوباره لازم است.
+      await api("POST", "/auth/register", body);
+      window.location.reload();
     } catch (x) {
       $("re").textContent = x.message;
-    }
-  },
-  verifyEmail: async () => {
-    const token = new URLSearchParams(location.search).get("verify");
-    if (!token) return;
-    try {
-      const result = await api("POST", "/auth/verify-email", { token });
-      history.replaceState(null, "", "/legacy/index.html");
-      Cloud.authNotice = result.message;
-      R();
-    } catch (error) {
-      $("ve").textContent = error.message;
-    }
-  },
-  resendVerification: async (e) => {
-    e.preventDefault();
-    const { email } = Object.fromEntries(new FormData(e.target));
-    try {
-      const result = await api("POST", "/auth/resend-verification", { email });
-      $("se").textContent = result.message;
-    } catch (error) {
-      $("se").textContent = error.message;
+      button.disabled = false;
     }
   },
   forgotPassword: async (e) => {
@@ -516,14 +535,24 @@ const A = {
   },
   resetPassword: async (e) => {
     e.preventDefault();
-    const { password } = Object.fromEntries(new FormData(e.target));
+    const d = Object.fromEntries(new FormData(e.target));
+    const password = String(d.password || "");
     const token = new URLSearchParams(location.search).get("reset");
+    if (password !== d.confirm) {
+      $("rp").textContent = "گذرواژهٔ دوم با گذرواژهٔ اول یکسان نیست.";
+      return;
+    }
+    if (!/\p{L}/u.test(password) || !/\p{N}/u.test(password)) {
+      $("rp").textContent = "گذرواژه باید شامل حرف و عدد باشد.";
+      return;
+    }
     try {
       const result = await api("POST", "/auth/reset-password", {
         token,
         new_password: password,
       });
       history.replaceState(null, "", "/legacy/index.html");
+      Cloud.authMode = "login";
       Cloud.authNotice = result.message;
       R();
     } catch (error) {
@@ -1106,7 +1135,7 @@ function R() {
         `<button class="${ui.page === n[0] ? "on" : ""}" onclick="A.nav('${n[0]}')">${n[1]}</button>`,
     ).join("") +
     (Cloud.status === "in"
-      ? `<button onclick="A.logout()">خروج (${E(Cloud.user.first_name)})</button>`
+      ? `<button onclick="A.logout()">خروج (${E(Cloud.user.first_name || Cloud.user.username)})</button>`
       : '<button onclick="A.openAccount()">ورود / ساخت حساب</button>');
   $("m").innerHTML =
     (Cloud.syncError

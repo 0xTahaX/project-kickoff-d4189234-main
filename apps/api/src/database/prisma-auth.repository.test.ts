@@ -31,7 +31,6 @@ function repositoryRecordingTransactions() {
     user: { update: operation, delete: operation },
     session: { deleteMany: operation },
     passwordReset: { deleteMany: operation, create: operation },
-    emailVerification: { deleteMany: operation, create: operation },
   };
 
   return {
@@ -65,19 +64,6 @@ describe("repository transaction wait limits", () => {
     );
 
     expectSingleTransactionWithLongWait(calls);
-  });
-
-  it("gives email verification creation a wait longer than Prisma's default", async () => {
-    const { calls, repository } = repositoryRecordingTransactions();
-
-    await repository.createEmailVerification(
-      "verification-hash",
-      "11111111-1111-1111-1111-111111111111",
-      new Date("2026-01-01T00:00:00.000Z"),
-    );
-
-    expectSingleTransactionWithLongWait(calls);
-    expect(calls[0]?.operationCount).toBe(2);
   });
 
   it("gives password reset completion a wait longer than Prisma's default", async () => {

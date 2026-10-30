@@ -6,4 +6,6 @@ node_modules/
 coverage/
 dist/
 apps/web/.vite/
+apps/web/test-results/
+apps/web/playwright-report/
 apps/api/src/generated/prisma/

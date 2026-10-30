@@ -1,12 +1,13 @@
 // این انواع مرز داده‌های احراز هویت را مشخص می‌کنند و جزئیات Prisma را از منطق دامنه جدا نگه می‌دارند.
+// شناسهٔ ورود نام کاربری است؛ ایمیل و گذرواژه اختیاری‌اند تا ورود Google در آینده بدون شکستن مدل اضافه شود.
 export interface User {
   id: string;
+  username: string;
   firstName: string;
   lastName: string;
-  email: string;
-  emailVerifiedAt: Date | null;
-  passwordHash: string;
-  passwordSalt: string;
+  email: string | null;
+  passwordHash: string | null;
+  passwordSalt: string | null;
   preferredLanguage: string;
   primaryCurrency: string;
   acceptedTermsAt: Date;
@@ -15,9 +16,10 @@ export interface User {
 
 export interface NewUser {
   id: string;
+  username: string;
   firstName: string;
   lastName: string;
-  email: string;
+  email: string | null;
   passwordHash: string;
   passwordSalt: string;
   acceptedTermsAt: Date;
@@ -62,9 +64,7 @@ export interface SessionSummary {
 // این contract اجازه می‌دهد مسیرهای HTTP بدون اتصال واقعی به PostgreSQL نیز تست شوند.
 export interface AuthRepository {
   createUser(user: NewUser): Promise<User>;
-  createEmailVerification(tokenHash: string, userId: string, expiresAt: Date): Promise<void>;
-  deleteEmailVerification(tokenHash: string): Promise<void>;
-  consumeEmailVerification(tokenHash: string, now: Date): Promise<User | null>;
+  findUserByUsername(username: string): Promise<User | null>;
   findUserByEmail(email: string): Promise<User | null>;
   findUserById(id: string): Promise<User | null>;
   updateProfile(id: string, update: ProfileUpdate): Promise<User>;

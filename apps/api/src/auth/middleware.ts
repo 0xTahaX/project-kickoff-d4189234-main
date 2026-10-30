@@ -32,7 +32,8 @@ export function authentication(repository: AuthRepository): RequestHandler {
       return;
     }
     const active = await repository.findActiveSession(hashToken(token), new Date());
-    if (active?.user.emailVerifiedAt) {
+    // تأیید ایمیل شرط ورود نیست؛ نشست معتبر یعنی کاربر وارد شده است.
+    if (active) {
       request.rawSessionToken = token;
       request.authSession = active.session;
       request.authUser = active.user;
