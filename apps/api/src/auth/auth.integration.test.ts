@@ -5,12 +5,19 @@ import type { AuthRepository, NewUser, Session, User } from "../domain/auth.js";
 import { createApp } from "../app.js";
 
 // این harness بدون PostgreSQL کار می‌کند و همان contract repository را پیاده می‌کند.
-function createHarness(options: { withMailer?: boolean; nodeEnv?: "test" | "production" } = {}) {
+function createHarness(
+  options: {
+    withMailer?: boolean;
+    nodeEnv?: "test" | "production";
+    hasLedger?: boolean;
+  } = {},
+) {
   const users = new Map<string, User>();
   const sessions = new Map<string, Session>();
   const resets = new Map<string, { userId: string; expiresAt: Date }>();
   const sentMail: SendMailOptions[] = [];
   const withMailer = options.withMailer ?? true;
+  const hasLedger = options.hasLedger ?? false;
 
   const byUsername = (username: string) =>
     [...users.values()].find((user) => user.username === username) ?? null;
@@ -21,6 +28,14 @@ function createHarness(options: { withMailer?: boolean; nodeEnv?: "test" | "prod
         throw Object.assign(new Error("Unique constraint failed"), {
           code: "P2002",
           meta: { target: ["username"] },
+        });
+      if (
+        input.email &&
+        [...users.values()].some((user) => user.email !== null && user.email === input.email)
+      )
+        throw Object.assign(new Error("Unique constraint failed"), {
+          code: "P2002",
+          meta: { target: ["email"] },
         });
       const user: User = {
         ...input,
@@ -91,15 +106,19 @@ function createHarness(options: { withMailer?: boolean; nodeEnv?: "test" | "prod
     deletePasswordReset: async (tokenHash) => {
       resets.delete(tokenHash);
     },
-    findPasswordReset: async (tokenHash, now) => {
+    consumePasswordReset: async (tokenHash, now, credential) => {
       const reset = resets.get(tokenHash);
-      return reset && reset.expiresAt > now ? { userId: reset.userId } : null;
-    },
-    completePasswordReset: async (userId, credential) => {
-      const current = users.get(userId);
-      if (current) users.set(userId, { ...current, ...credential });
-      for (const [tokenHash, session] of sessions)
-        if (session.userId === userId) sessions.delete(tokenHash);
+      if (!reset || reset.expiresAt <= now) return false;
+      // مصرف اتمیک توکن: اولین فراخوانی برنده است و بقیه false می‌گیرند.
+      resets.delete(tokenHash);
+      const current = users.get(reset.userId);
+      if (!current) return false;
+      users.set(reset.userId, { ...current, ...credential });
+      for (const [hash, session] of sessions)
+        if (session.userId === reset.userId) sessions.delete(hash);
+      for (const [hash, entry] of resets)
+        if (entry.userId === reset.userId) resets.delete(hash);
+      return true;
     },
     changePassword: async (userId, credential, currentTokenHash) => {
       const current = users.get(userId);
@@ -112,6 +131,7 @@ function createHarness(options: { withMailer?: boolean; nodeEnv?: "test" | "prod
       users.delete(userId);
     },
     deleteExpired: async () => {},
+    hasLedgerEntries: async () => hasLedger,
   };
 
   const app = createApp({
@@ -202,8 +222,41 @@ describe("username and password authentication", () => {
     const cookie = Array.isArray(header) ? header[0]! : String(header ?? "");
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
-    expect(cookie).toContain("SameSite=None");
+    // اپ same-origin است؛ Lax امن‌تر و سازگارتر از None است و Partitioned لازم نیست.
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Partitioned");
     expect(cookie).toMatch(/Max-Age=\d+/);
+  });
+
+  it("omits the Secure flag outside production so local http development works", async () => {
+    const harness = createHarness();
+    const registration = await register(harness.app, validAccount);
+    expect(registration.status).toBe(201);
+
+    const header = registration.headers["set-cookie"];
+    const cookie = Array.isArray(header) ? header[0]! : String(header ?? "");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).not.toContain("Secure");
+  });
+
+  it("returns a generic conflict for a duplicate e-mail and never reports an e-mail-specific error", async () => {
+    const harness = createHarness();
+    const first = await register(harness.app, {
+      ...validAccount,
+      username: "with_email",
+      email: "taken@example.com",
+    });
+    expect(first.status).toBe(201);
+
+    const duplicate = await register(harness.app, {
+      ...validAccount,
+      username: "other_user",
+      email: "taken@example.com",
+    });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.code).toBe("REGISTRATION_CONFLICT");
+    expect(duplicate.body.fields).toBeUndefined();
+    expect(JSON.stringify(duplicate.body)).not.toContain("taken@example.com");
   });
 
   it("treats usernames case-insensitively and rejects a duplicate", async () => {
@@ -348,6 +401,72 @@ describe("username and password authentication", () => {
       password: "resetpass456",
     });
     expect(signIn.status).toBe(200);
+
+    // توکن یک‌بارمصرف است: استفادهٔ دوباره باید رد شود و گذرواژه را تغییر ندهد.
+    const reuse = await request(harness.app)
+      .post("/api/auth/reset-password")
+      .set("X-Requested-With", "dara")
+      .send({ token, new_password: "thirdpass789" });
+    expect(reuse.status).toBe(400);
+    expect(reuse.body.code).toBe("INVALID_RESET_TOKEN");
+
+    const stillWorks = await login(harness.app, {
+      username: "with_mail",
+      password: "resetpass456",
+    });
+    expect(stillWorks.status).toBe(200);
+  });
+
+  it("rejects an expired password reset token", async () => {
+    const harness = createHarness();
+    await register(harness.app, {
+      ...validAccount,
+      username: "expired_user",
+      email: "expired@example.com",
+    });
+    const forgot = await request(harness.app)
+      .post("/api/auth/forgot-password")
+      .set("X-Requested-With", "dara")
+      .send({ email: "expired@example.com" });
+    expect(forgot.status).toBe(200);
+
+    const token = new URL(String(harness.sentMail[0]!.text).split("\n").at(-1)!)
+      .searchParams.get("reset")!;
+    // شبیه‌سازی گذشت زمان: رکورد توکن منقضی می‌شود.
+    for (const [hash, entry] of harness.resets)
+      harness.resets.set(hash, { ...entry, expiresAt: new Date(Date.now() - 1_000) });
+
+    const reset = await request(harness.app)
+      .post("/api/auth/reset-password")
+      .set("X-Requested-With", "dara")
+      .send({ token, new_password: "newpass123" });
+    expect(reset.status).toBe(400);
+    expect(reset.body.code).toBe("INVALID_RESET_TOKEN");
+  });
+
+  it("locks the primary currency once ledger entries exist", async () => {
+    const locked = createHarness({ hasLedger: true });
+    const lockedRegistration = await register(locked.app, validAccount);
+    const lockedCookie = sessionCookie(lockedRegistration);
+
+    const rejected = await request(locked.app)
+      .patch("/api/me")
+      .set("X-Requested-With", "dara")
+      .set("Cookie", lockedCookie)
+      .send({ primary_currency: "USD" });
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.code).toBe("CURRENCY_LOCKED");
+
+    const free = createHarness({ hasLedger: false });
+    const freeRegistration = await register(free.app, validAccount);
+    const freeCookie = sessionCookie(freeRegistration);
+    const accepted = await request(free.app)
+      .patch("/api/me")
+      .set("X-Requested-With", "dara")
+      .set("Cookie", freeCookie)
+      .send({ primary_currency: "USD" });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.primary_currency).toBe("USD");
   });
 
   it("refuses password reset emails when SMTP is not configured", async () => {

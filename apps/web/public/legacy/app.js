@@ -6,7 +6,10 @@ const P = (s) =>
     .replace(/[,٬،\s]/g, "");
 const parseAmt = (s, z) => {
   const t = P(s);
-  return /^\d+$/.test(t) && +t >= (z ? 0 : 1) && +t <= 1e13 ? +t : null;
+  // حداکثر ۶ رقم اعشار، هم‌تراز با Decimal(20,6) دیتابیس.
+  if (!/^\d{1,14}(?:\.\d{1,6})?$/.test(t)) return null;
+  const n = Number(t);
+  return n >= (z ? 0 : 0.000001) && n <= 1e13 ? n : null;
 };
 const okDate = (s) =>
   /^\d{4}-\d\d-\d\d$/.test(s) &&
@@ -131,7 +134,7 @@ const E = (s) =>
     /[&<>"]/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
   );
-const nf = new Intl.NumberFormat("fa-IR"),
+const nf = new Intl.NumberFormat("fa-IR", { maximumFractionDigits: 6 }),
   M = (n) => nf.format(n) + " " + S.cur;
 const fd = (i) =>
   new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
@@ -214,7 +217,7 @@ const pnav = () =>
   `<div class=top><h2 style="margin:0">${fmn(per().b)}</h2><span><button class=b onclick="A.sh(-1)">ماه قبل</button> <button class=b onclick="A.sh(0)">این ماه</button> <button class=b onclick="A.sh(1)">ماه بعد</button></span></div>`;
 const form = (t, f, v, save) => {
   const dl = $("dlg");
-  dl.innerHTML = `<form><h3>${t}</h3>${f.map((x) => `<label>${x.l}${x.t === "sel" ? `<select name=${x.k}>${x.o.map((o) => `<option value="${o[0]}"${o[0] == v[x.k] ? " selected" : ""}>${o[1]}</option>`).join("")}</select>` : `<input name=${x.k} type="${x.t === "date" ? "date" : "text"}" inputmode="${x.t === "amt" ? "numeric" : "text"}" value="${E(v[x.k] ?? "")}">`}</label>`).join("")}<p class=err id=er></p><div class=acts><button class=pri>ذخیره</button><button type=button class=b onclick="$('dlg').close()">انصراف</button></div></form>`;
+  dl.innerHTML = `<form><h3>${t}</h3>${f.map((x) => `<label>${x.l}${x.t === "sel" ? `<select name=${x.k}>${x.o.map((o) => `<option value="${E(o[0])}"${o[0] == v[x.k] ? " selected" : ""}>${E(o[1])}</option>`).join("")}</select>` : `<input name=${x.k} type="${x.t === "date" ? "date" : "text"}" inputmode="${x.t === "amt" ? "numeric" : "text"}" value="${E(v[x.k] ?? "")}">`}</label>`).join("")}<p class=err id=er></p><div class=acts><button class=pri>ذخیره</button><button type=button class=b onclick="$('dlg').close()">انصراف</button></div></form>`;
   const fo = dl.querySelector("form");
   fo.onsubmit = (e) => {
     e.preventDefault();
@@ -301,12 +304,18 @@ window.DARA_SYNC_WORKSPACE = syncWorkspace;
 // مبالغ داشبورد به «تومان» است و ارز پایهٔ حساب ریال؛ هر تومان ده ریال است.
 const factor = () =>
   Cloud.user && Cloud.user.primary_currency === "IRR" && S.cur === "تومان" ? 10 : 1;
+// واحد نمایش فقط می‌تواند یکی از واحدهای ارز اصلی باشد؛ تغییر نام واحد هرگز به معنی تبدیل ارز نیست.
+const displayUnits = () => {
+  const primary = Cloud.user && Cloud.user.primary_currency;
+  return !primary || primary === "IRR" ? ["تومان", "ریال"] : [primary];
+};
 const ACC_T = { cash: "CASH", bank: "BANK", savings: "SAVINGS", investment: "INVESTMENT" };
 const accDto = (a) => ({
   id: a.id,
   name: a.name,
   type: ACC_T[a.type] || "CASH",
-  opening_balance: String(Math.round((a.opening || 0) * factor())),
+  // ضرب دقیق اعشاری؛ Math.round قبلی برای ارزهای غیر ریال باعث از دست رفتن اعشار می‌شد.
+  opening_balance: DaraMoney.multiply(a.opening || 0, factor()),
 });
 const txDto = (t) => {
   const accs = [t.acc, t.to].filter(Boolean).map((id) => S.accounts.find((a) => a.id === id));
@@ -315,7 +324,7 @@ const txDto = (t) => {
     transaction: {
       id: t.id,
       kind: t.type.toUpperCase(),
-      amount: String(Math.round(t.amount * factor())),
+      amount: DaraMoney.multiply(t.amount, factor()),
       occurred_on: t.date,
       account_id: t.acc,
       target_id: t.to || null,
@@ -355,12 +364,14 @@ async function cloudLoad() {
     local = JSON.parse(localStorage.getItem(K));
   } catch {}
   S = local && local.v === 2 ? local : newState();
+  // واحد نمایش ذخیره‌شده اگر با ارز اصلی نخواند، به واحد معتبر برمی‌گردد تا مبالغ بدتفسیر نشوند.
+  if (!displayUnits().includes(S.cur)) S.cur = displayUnits()[0];
   const f = factor();
   const sa = L.accounts.map((a) => ({
     id: a.id,
     name: a.name,
     type: a.type.toLowerCase(),
-    opening: Math.round(+a.opening_balance / f),
+    opening: Number(DaraMoney.divide(a.opening_balance, f)),
   }));
   S.accounts = sa.concat(S.accounts.filter((a) => !sa.some((x) => x.id === a.id)));
   const sc = L.categories.map((c) => ({ id: c.id, name: c.name, kind: c.kind.toLowerCase() }));
@@ -368,7 +379,7 @@ async function cloudLoad() {
   S.tx = L.transactions.map((t) => ({
     id: t.id,
     type: t.kind.toLowerCase(),
-    amount: Math.round(+t.amount / f),
+    amount: Number(DaraMoney.divide(t.amount, f)),
     date: t.occurred_on,
     acc: t.account_id,
     to: t.target_id,
@@ -577,11 +588,15 @@ const A = {
     R();
   },
   tx: (id) => {
-    const o = S.tx.find((t) => t.id === id) || {
+    const existing = S.tx.find((t) => t.id === id);
+    const o = existing || {
       type: "expense",
       date: today(),
       acc: S.accounts[0]?.id,
     };
+    // شناسه یک‌بار و هنگام باز شدن فرم ساخته می‌شود؛ دوبار کلیک، تلاش دوباره یا retry شبکه همان
+    // رکورد را به‌روزرسانی می‌کند و تراکنش تکراری نمی‌سازد.
+    const txId = existing?.id ?? uid();
     form(
       id ? "ویرایش تراکنش" : "تراکنش جدید",
       [
@@ -618,9 +633,9 @@ const A = {
         const tr = d.type === "transfer";
         const prevTx = S.tx;
         S.tx = S.tx
-          .filter((x) => x.id !== o.id)
+          .filter((x) => x.id !== txId)
           .concat({
-            id: o.id || uid(),
+            id: txId,
             type: d.type,
             amount: a,
             date: d.date,
@@ -850,7 +865,9 @@ const A = {
     }
   },
   cur: (v) => {
-    S.cur = v.trim() || "تومان";
+    // واحد نمایش از فهرست مجاز انتخاب می‌شود تا مبالغ با واحد ناشناخته ذخیره نشوند.
+    const unit = String(v ?? "").trim();
+    S.cur = displayUnits().includes(unit) ? unit : displayUnits()[0];
     persist();
     R();
   },
@@ -951,7 +968,7 @@ const pages = {
         .sort((a, b) => (a.date < b.date ? 1 : -1)),
       T = totals(l),
       so = (k, o) =>
-        `<select onchange="ui.${k}=this.value;R()"><option value="">همه</option>${o.map((x) => `<option value="${x[0]}"${ui[k] === x[0] ? " selected" : ""}>${x[1]}</option>`).join("")}</select>`;
+        `<select onchange="ui.${k}=this.value;R()"><option value="">همه</option>${o.map((x) => `<option value="${E(x[0])}"${ui[k] === x[0] ? " selected" : ""}>${E(x[1])}</option>`).join("")}</select>`;
     return (
       pnav() +
       `<div class=top><h2 style="margin:0">تراکنش‌ها</h2><button class=pri onclick="A.tx()">+ تراکنش جدید</button></div><div class=flt><input placeholder="جستجو…" value="${E(ui.q)}" onchange="ui.q=this.value;R()">${so(
@@ -1040,7 +1057,7 @@ const pages = {
   },
   set() {
     const bl = balances(S);
-    return `<h2>تنظیمات</h2>${card("حساب‌ها", `<ul>${S.accounts.map((a) => `<li class=row><div><b>${E(a.name)}</b><small>موجودی اولیه: ${M(a.opening)}</small></div><span>${M(bl[a.id])}</span><button class=b onclick="A.da('${a.id}')">حذف</button></li>`).join("")}</ul><button class=b onclick="A.acct()">+ حساب</button><p><small>موجودی = موجودی اولیه + درآمد − هزینه ± انتقال‌ها. انتقال‌ها درآمد یا هزینه حساب نمی‌شوند.</small></p>`)}${card("دسته‌بندی‌ها", `<p>${S.cats.map((c) => `<span class="tag ${c.kind === "income" ? "g" : ""}">${E(c.name)}</span> `).join("")}</p><button class=b onclick="A.cat()">+ دسته</button>`)}${card("واحد پول", `<label>نام واحد (همه مبالغ یک واحد دارند و تبدیل ارز انجام نمی‌شود)<input value="${E(S.cur)}" onchange="A.cur(this.value)"></label>`)}${card("داده‌ها", `<button class=b onclick="A.reset()">پاک‌سازی داده‌های دفتر اصلی</button>`) }${window.DaraPhase5UI ? window.DaraPhase5UI.renderPrivacy(S) : ""}`;
+    return `<h2>تنظیمات</h2>${card("حساب‌ها", `<ul>${S.accounts.map((a) => `<li class=row><div><b>${E(a.name)}</b><small>موجودی اولیه: ${M(a.opening)}</small></div><span>${M(bl[a.id])}</span><button class=b onclick="A.da('${a.id}')">حذف</button></li>`).join("")}</ul><button class=b onclick="A.acct()">+ حساب</button><p><small>موجودی = موجودی اولیه + درآمد − هزینه ± انتقال‌ها. انتقال‌ها درآمد یا هزینه حساب نمی‌شوند.</small></p>`)}${card("دسته‌بندی‌ها", `<p>${S.cats.map((c) => `<span class="tag ${c.kind === "income" ? "g" : ""}">${E(c.name)}</span> `).join("")}</p><button class=b onclick="A.cat()">+ دسته</button>`)}${card("واحد پول", `<label>نام واحد (همه مبالغ یک واحد دارند و تبدیل ارز انجام نمی‌شود)<select onchange="A.cur(this.value)">${displayUnits().map((u) => `<option value="${E(u)}"${S.cur === u ? " selected" : ""}>${E(u)}</option>`).join("")}</select></label>`)}${card("داده‌ها", `<button class=b onclick="A.reset()">پاک‌سازی داده‌های دفتر اصلی</button>`) }${window.DaraPhase5UI ? window.DaraPhase5UI.renderPrivacy(S) : ""}`;
   },
 };
 const answer = (q) => {

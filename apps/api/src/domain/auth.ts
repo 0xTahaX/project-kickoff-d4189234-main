@@ -77,8 +77,12 @@ export interface AuthRepository {
   deleteOtherSessions(userId: string, currentTokenHash: string): Promise<void>;
   createPasswordReset(tokenHash: string, userId: string, expiresAt: Date): Promise<void>;
   deletePasswordReset(tokenHash: string): Promise<void>;
-  findPasswordReset(tokenHash: string, now: Date): Promise<{ userId: string } | null>;
-  completePasswordReset(userId: string, credential: PasswordCredential): Promise<void>;
+  // توکن را اتمیک مصرف می‌کند؛ true یعنی همین فراخوانی برنده شد و گذرواژه تغییر کرد.
+  consumePasswordReset(
+    tokenHash: string,
+    now: Date,
+    credential: PasswordCredential,
+  ): Promise<boolean>;
   changePassword(
     userId: string,
     credential: PasswordCredential,
@@ -86,4 +90,6 @@ export interface AuthRepository {
   ): Promise<void>;
   deleteUser(userId: string): Promise<void>;
   deleteExpired(now: Date): Promise<void>;
+  // تغییر ارز اصلی وقتی حساب/تراکنش ثبت شده باشد مجاز نیست تا دفتر تک‌ارزی بماند.
+  hasLedgerEntries(userId: string): Promise<boolean>;
 }

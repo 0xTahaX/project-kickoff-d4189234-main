@@ -87,10 +87,12 @@ npm.cmd test
 npm.cmd run build
 npm.cmd run db:validate
 npm.cmd run test:e2e
+npm.cmd run security:smoke
 ```
 
 `npm.cmd test` در دسترس نبودن مسیرهای ورود/ثبت‌نام API، محاسبات مالی، cache provider و تست‌های وب/legacy را بررسی می‌کند؛ اجرای migration روی PostgreSQL واقعی جداگانه لازم است.
 آزمون Playwright مسیرهای قدیمی حساب و ثبت دارایی/رویداد سرمایه‌گذاری را بررسی می‌کند؛ برای آن فقط Chromium (`npx playwright install chromium`) لازم است.
+`npm.cmd run security:smoke` با دو کاربر واقعی، جداسازی داده (BOLA/IDOR) و درستی ارز را روی API در حال اجرا بررسی می‌کند؛ `BASE_URL` را در محیط تنظیم کنید. جزئیات در [TESTING.md](./TESTING.md) و کنترل‌های امنیتی در [SECURITY.md](./SECURITY.md).
 
 ## دستیار، یادآورها و تبادل داده
 

@@ -17,6 +17,7 @@ import {
 import { hashPassword, verifyPassword } from "./password.js";
 import { hashToken, createOpaqueToken } from "./tokens.js";
 import { requireUser, SESSION_COOKIE } from "./middleware.js";
+import { logSecurityEvent } from "../http/security-log.js";
 
 export interface AuthConfig {
   nodeEnv: "development" | "test" | "production";
@@ -67,33 +68,33 @@ function publicUser(user: User) {
   };
 }
 
+// اپ same-origin است؛ SameSite=Lax هم کوکی را در درخواست‌های cross-site نمی‌فرستد و هم در
+// Safari/Firefox پایدارتر از SameSite=None است. Secure فقط روی HTTPS (production) اضافه می‌شود
+// تا توسعهٔ محلی روی http کار کند. CSRF جداگانه با Origin و X-Requested-With بررسی می‌شود.
+function sessionCookieFlags(maxAge: number, secure: boolean): string {
+  return [
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(secure ? ["Secure"] : []),
+    `Max-Age=${Math.floor(maxAge / 1000)}`,
+  ].join("; ");
+}
+
 function setSessionCookie(
   response: Response,
   token: string,
   maxAge: number,
   secure: boolean,
 ) {
-  // پیش‌نمایش داخل iframe اجرا می‌شود؛ کوکی پارتیشن‌شده با SameSite=None در آن هم ارسال می‌شود.
-  // محافظت CSRF با بررسی Origin و سرآیند X-Requested-With انجام می‌شود.
-  void secure;
-  const flags = [
-    "Path=/",
-    "HttpOnly",
-    "SameSite=None",
-    "Secure",
-    "Partitioned",
-    `Max-Age=${Math.floor(maxAge / 1000)}`,
-  ];
   response.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${flags.join("; ")}`,
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; ${sessionCookieFlags(maxAge, secure)}`,
   );
 }
 
 function clearSessionCookie(response: Response, secure: boolean) {
-  void secure;
-  const flags = ["Path=/", "HttpOnly", "SameSite=None", "Secure", "Partitioned", "Max-Age=0"];
-  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=; ${flags.join("; ")}`);
+  response.setHeader("Set-Cookie", `${SESSION_COOKIE}=; ${sessionCookieFlags(0, secure)}`);
 }
 
 // نشست تازه می‌سازد و کوکی HttpOnly آن را تنظیم می‌کند؛ هم ثبت‌نام و هم ورود از آن استفاده می‌کنند.
@@ -152,6 +153,11 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
       });
       // تأیید ایمیل بخشی از ثبت‌نام نیست؛ حساب بلافاصله فعال و وارد می‌شود.
       await startSession(repository, request, response, user, false, secureCookie);
+      logSecurityEvent("registration_success", {
+        ip: request.ip,
+        username: user.username,
+        route: "/api/auth/register",
+      });
       response.status(201).json({
         message: "حساب ساخته شد و وارد شدید.",
         user: publicUser(user),
@@ -166,10 +172,22 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     async (request, response) => {
       const body = request.body as ReturnType<typeof loginSchema.parse>;
       const user = await repository.findUserByUsername(body.username);
-      if (!user || !(await verifyPassword(body.password, user)))
+      if (!user || !(await verifyPassword(body.password, user))) {
+        logSecurityEvent("login_failure", {
+          ip: request.ip,
+          username: body.username,
+          route: "/api/auth/login",
+          reason: "invalid_credentials",
+        });
         throw new ApiError(401, "INVALID_CREDENTIALS", "نام کاربری یا گذرواژه درست نیست.");
+      }
 
       await startSession(repository, request, response, user, body.remember, secureCookie);
+      logSecurityEvent("login_success", {
+        ip: request.ip,
+        username: user.username,
+        route: "/api/auth/login",
+      });
       response.json({ user: publicUser(user) });
     },
   );
@@ -186,6 +204,11 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
           "ارسال ایمیل بازیابی در تنظیمات سرور فعال نشده است.",
         );
       const body = request.body as ReturnType<typeof forgotPasswordSchema.parse>;
+      logSecurityEvent("password_reset_requested", {
+        ip: request.ip,
+        username: body.email,
+        route: "/api/auth/forgot-password",
+      });
       const user = await repository.findUserByEmail(body.email);
       if (user && user.email) {
         const token = createOpaqueToken();
@@ -205,6 +228,12 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
           });
         } catch {
           await repository.deletePasswordReset(hashToken(token));
+          logSecurityEvent("password_reset_requested", {
+            ip: request.ip,
+            username: body.email,
+            route: "/api/auth/forgot-password",
+            reason: "delivery_failed",
+          });
           throw new ApiError(
             502,
             "EMAIL_DELIVERY_FAILED",
@@ -224,15 +253,29 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     validateBody(resetPasswordSchema),
     async (request, response) => {
       const body = request.body as ReturnType<typeof resetPasswordSchema.parse>;
-      const reset = await repository.findPasswordReset(hashToken(body.token), new Date());
-      if (!reset)
+      const credential = await hashPassword(body.new_password);
+      // مصرف اتمیک: اگر توکن قبلاً استفاده/منقضی شده باشد، گذرواژه تغییر نمی‌کند.
+      const consumed = await repository.consumePasswordReset(
+        hashToken(body.token),
+        new Date(),
+        credential,
+      );
+      if (!consumed) {
+        logSecurityEvent("authorization_denied", {
+          ip: request.ip,
+          route: "/api/auth/reset-password",
+          reason: "invalid_or_used_reset_token",
+        });
         throw new ApiError(
           400,
           "INVALID_RESET_TOKEN",
           "لینک بازیابی معتبر نیست یا زمان آن گذشته است.",
         );
-      const credential = await hashPassword(body.new_password);
-      await repository.completePasswordReset(reset.userId, credential);
+      }
+      logSecurityEvent("password_reset_completed", {
+        ip: request.ip,
+        route: "/api/auth/reset-password",
+      });
       clearSessionCookie(response, secureCookie);
       response.json({ message: "گذرواژه تغییر کرد." });
     },
@@ -240,6 +283,12 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
 
   router.post("/logout", async (request, response) => {
     if (request.authSession) await repository.deleteSession(request.authSession.tokenHash);
+    if (request.authUser)
+      logSecurityEvent("logout", {
+        ip: request.ip,
+        username: request.authUser.username,
+        route: "/api/auth/logout",
+      });
     clearSessionCookie(response, secureCookie);
     response.status(204).end();
   });
@@ -251,14 +300,26 @@ export function createAuthRouter(options: AuthRouteOptions): Router {
     validateBody(changePasswordSchema),
     async (request, response) => {
       const body = request.body as ReturnType<typeof changePasswordSchema.parse>;
-      if (!(await verifyPassword(body.current_password, request.authUser)))
+      if (!(await verifyPassword(body.current_password, request.authUser))) {
+        logSecurityEvent("authorization_denied", {
+          ip: request.ip,
+          username: request.authUser!.username,
+          route: "/api/auth/change-password",
+          reason: "invalid_current_password",
+        });
         throw new ApiError(400, "INVALID_PASSWORD", "گذرواژه‌ی فعلی درست نیست.");
+      }
       const credential = await hashPassword(body.new_password);
       await repository.changePassword(
         request.authUser!.id,
         credential,
         request.authSession!.tokenHash,
       );
+      logSecurityEvent("password_changed", {
+        ip: request.ip,
+        username: request.authUser!.username,
+        route: "/api/auth/change-password",
+      });
       response.json({ message: "گذرواژه تغییر کرد." });
     },
   );
@@ -300,7 +361,20 @@ export function createProfileRouter(
       if (body.last_name !== undefined) update.lastName = body.last_name;
       if (body.preferred_language !== undefined)
         update.preferredLanguage = body.preferred_language;
-      if (body.primary_currency !== undefined) update.primaryCurrency = body.primary_currency;
+      if (body.primary_currency !== undefined) {
+        // تغییر ارز اصلی، ارز تراکنش‌های موجود را بازنویسی نمی‌کند؛ برای جلوگیری از دفتر چندارزی
+        // ناخواسته، پس از ثبت حساب اجازهٔ تغییر داده نمی‌شود.
+        if (
+          body.primary_currency !== request.authUser!.primaryCurrency &&
+          (await repository.hasLedgerEntries(request.authUser!.id))
+        )
+          throw new ApiError(
+            409,
+            "CURRENCY_LOCKED",
+            "پس از ثبت حساب یا تراکنش، ارز اصلی قابل تغییر نیست.",
+          );
+        update.primaryCurrency = body.primary_currency;
+      }
       const user = await repository.updateProfile(request.authUser!.id, update);
       response.json(publicUser(user));
     },
@@ -316,6 +390,11 @@ export function createProfileRouter(
       if (!(await verifyPassword(body.password, request.authUser)))
         throw new ApiError(400, "INVALID_PASSWORD", "گذرواژه درست نیست.");
       await repository.deleteUser(request.authUser!.id);
+      logSecurityEvent("account_deleted", {
+        ip: request.ip,
+        username: request.authUser!.username,
+        route: "/api/me",
+      });
       clearSessionCookie(response, secureCookie);
       response.status(204).end();
     },

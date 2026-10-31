@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 test("account routes open authentication and still allow an explicit guest session", async ({ page }) => {
+  // این آزمون باید مستقل از محیط باشد؛ API عمداً قطع می‌شود تا حالت «سرور در دسترس نیست» بررسی شود.
+  await page.route("**/api/**", (route) => route.abort("failed"));
   for (const route of ["/", "/login", "/register", "/forgot-password", "/reset-password"]) {
     await page.goto(route);
     await expect(page).toHaveURL(/\/legacy\/index\.html(?:\?.*)?$/);
@@ -12,11 +14,42 @@ test("account routes open authentication and still allow an explicit guest sessi
 });
 
 test("the legacy account page opens auth and exposes the guest dashboard", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
   await page.goto("/legacy/account.html");
   await expect(page).toHaveURL(/\/legacy\/index\.html$/);
   await expect(page.getByRole("button", { name: "ادامه به عنوان مهمان" })).toBeVisible();
   await page.getByRole("button", { name: "ادامه به عنوان مهمان" }).click();
   await expect(page.getByRole("button", { name: "تراکنش‌ها" })).toBeVisible();
+});
+
+test("user-controlled account and category names are escaped in the transaction form", async ({ page }) => {
+  const malicious = '<img src=x onerror="window.__xss=1">';
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.addInitScript((name) => {
+    localStorage.setItem(
+      "dara.v2.preview",
+      JSON.stringify({
+        v: 2,
+        cur: "تومان",
+        accounts: [{ id: "a1", name, type: "cash", opening: 0 }],
+        cats: [{ id: "c1", name, kind: "expense" }],
+        tx: [],
+        budgets: {},
+        goals: [],
+        rec: [],
+      }),
+    );
+  }, malicious);
+
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "تراکنش‌ها" }).click();
+  await page.getByRole("button", { name: "+ تراکنش جدید" }).click();
+
+  const dialog = page.getByRole("dialog");
+  // نام در <option> باید به‌صورت متن دیده شود، نه HTML اجراشده.
+  await expect(dialog.locator("option", { hasText: malicious }).first()).toHaveText(malicious);
+  await expect(dialog.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
 });
 
 test("registration and username login are connected to the authentication API", async ({ page }) => {

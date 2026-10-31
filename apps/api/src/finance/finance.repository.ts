@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { ApiError } from "../http/errors.js";
 import { TRANSACTION_MAX_WAIT_MS } from "../database/prisma-auth.repository.js";
+import { resolveTransactionCurrency } from "./currency.js";
 
 export type AccountKind = "CASH" | "BANK" | "SAVINGS" | "INVESTMENT";
 export type CategoryKindValue = "INCOME" | "EXPENSE";
@@ -166,16 +167,38 @@ export class PrismaFinanceRepository implements FinanceStore {
           input.accounts,
           input.categories,
         );
+        // ارز هر تراکنش از حساب خودش خوانده می‌شود؛ انتقال بین دو ارز کل دسته را رد می‌کند.
+        const ids = new Set<string>();
+        for (const transaction of input.transactions) {
+          ids.add(transaction.account_id);
+          if (transaction.target_id) ids.add(transaction.target_id);
+        }
+        const rows = await db.account.findMany({
+          where: { userId, id: { in: [...ids] } },
+          select: { id: true, currency: true },
+        });
+        const currencies = new Map(rows.map((row) => [row.id, row.currency]));
+        const data = input.transactions.map((transaction) => {
+          const accountCurrency = currencies.get(transaction.account_id);
+          if (!accountCurrency)
+            throw new ApiError(409, "LEDGER_CONFLICT", "حساب تراکنش پیدا نشد.");
+          const transactionCurrency = resolveTransactionCurrency({
+            kind: transaction.kind,
+            accountCurrency,
+            targetCurrency: transaction.target_id
+              ? (currencies.get(transaction.target_id) ?? null)
+              : null,
+          });
+          return {
+            ...this.transactionData(transactionCurrency, transaction),
+            id: transaction.id,
+            userId,
+          };
+        });
         await db.transaction.deleteMany({
           where: { userId, id: { in: input.transactions.map((transaction) => transaction.id) } },
         });
-        await db.transaction.createMany({
-          data: input.transactions.map((transaction) => ({
-            ...this.transactionData(currency, transaction),
-            id: transaction.id,
-            userId,
-          })),
-        });
+        await db.transaction.createMany({ data });
       }, options);
     } catch (error) {
       this.throwLedgerConflict(error);
@@ -202,7 +225,7 @@ export class PrismaFinanceRepository implements FinanceStore {
       input.accounts,
       input.category ? [input.category] : [],
     );
-    await this.writeTransaction(db, userId, currency, input.transaction);
+    await this.writeTransaction(db, userId, input.transaction);
   }
 
   private async writeAccountsAndCategories(
@@ -237,9 +260,26 @@ export class PrismaFinanceRepository implements FinanceStore {
   private async writeTransaction(
     db: Prisma.TransactionClient,
     userId: string,
-    currency: string,
     transaction: TransactionInput,
   ): Promise<void> {
+    // ارز از حساب مبدأ (و برای انتقال، سازگاری ارز مقصد) گرفته می‌شود؛ ارز پیش‌فرض کاربر اینجا
+    // نقشی ندارد تا تغییر آن تاریخچه را دگرگون نکند.
+    const account = await db.account.findFirst({
+      where: { id: transaction.account_id, userId },
+      select: { currency: true },
+    });
+    if (!account) throw new ApiError(409, "LEDGER_CONFLICT", "حساب تراکنش پیدا نشد.");
+    const target = transaction.target_id
+      ? await db.account.findFirst({
+          where: { id: transaction.target_id, userId },
+          select: { currency: true },
+        })
+      : null;
+    const currency = resolveTransactionCurrency({
+      kind: transaction.kind,
+      accountCurrency: account.currency,
+      targetCurrency: target?.currency ?? null,
+    });
     const data = this.transactionData(currency, transaction);
     const updated = await db.transaction.updateMany({
       where: { id: transaction.id, userId },

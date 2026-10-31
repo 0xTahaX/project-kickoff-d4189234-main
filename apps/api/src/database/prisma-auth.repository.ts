@@ -95,21 +95,30 @@ export class PrismaAuthRepository implements AuthRepository {
     await this.prisma.passwordReset.deleteMany({ where: { tokenHash } });
   }
 
-  findPasswordReset(tokenHash: string, now: Date): Promise<{ userId: string } | null> {
-    return this.prisma.passwordReset.findFirst({
-      where: { tokenHash, expiresAt: { gt: now } },
-      select: { userId: true },
-    });
-  }
-
-  async completePasswordReset(userId: string, credential: PasswordCredential): Promise<void> {
-    await this.prisma.$transaction(
-      [
-        this.prisma.user.update({ where: { id: userId }, data: credential }),
-        this.prisma.session.deleteMany({ where: { userId } }),
-        this.prisma.passwordReset.deleteMany({ where: { userId } }),
-      ],
-      { maxWait: TRANSACTION_MAX_WAIT_MS },
+  // مصرف اتمیک: ابتدا ردیف با شرط انقضا حذف می‌شود و فقط اگر همین فراخوانی موفق به حذف شد
+  // گذرواژه تغییر می‌کند؛ درخواست‌های همزمان با یک توکن، دومی را رد می‌کند.
+  async consumePasswordReset(
+    tokenHash: string,
+    now: Date,
+    credential: PasswordCredential,
+  ): Promise<boolean> {
+    return this.prisma.$transaction(
+      async (db) => {
+        const reset = await db.passwordReset.findFirst({
+          where: { tokenHash, expiresAt: { gt: now } },
+          select: { userId: true },
+        });
+        if (!reset) return false;
+        const claimed = await db.passwordReset.deleteMany({
+          where: { tokenHash, expiresAt: { gt: now } },
+        });
+        if (!claimed.count) return false;
+        await db.user.update({ where: { id: reset.userId }, data: credential });
+        await db.session.deleteMany({ where: { userId: reset.userId } });
+        await db.passwordReset.deleteMany({ where: { userId: reset.userId } });
+        return true;
+      },
+      { maxWait: TRANSACTION_MAX_WAIT_MS, timeout: TRANSACTION_MAX_WAIT_MS },
     );
   }
 
@@ -132,6 +141,11 @@ export class PrismaAuthRepository implements AuthRepository {
 
   async deleteUser(userId: string): Promise<void> {
     await this.prisma.user.delete({ where: { id: userId } });
+  }
+
+  async hasLedgerEntries(userId: string): Promise<boolean> {
+    const accounts = await this.prisma.account.count({ where: { userId } });
+    return accounts > 0;
   }
 
   async deleteExpired(now: Date): Promise<void> {

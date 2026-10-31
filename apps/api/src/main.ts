@@ -51,6 +51,11 @@ async function start(): Promise<void> {
   const server = app.listen(config.port, () => {
     console.info(`Dara API listening on port ${config.port}`);
   });
+  // محافظت از Node در برابر Slowloris و درخواست‌های بی‌پایان؛ مقادیر پیش‌فرض Node در برخی
+  // تنظیمات بسیار سخاوتمندانه‌اند و می‌توانند منابع را اشغال کنند.
+  server.headersTimeout = 20_000;
+  server.requestTimeout = 60_000;
+  server.keepAliveTimeout = 5_000;
 
   const shutdown = async (signal: string) => {
     console.info(`Received ${signal}; closing the API server.`);

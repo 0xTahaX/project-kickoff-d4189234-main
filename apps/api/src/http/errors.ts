@@ -51,16 +51,20 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, _ne
       ? error.code
       : undefined;
   if (dbCode === "P2002") {
-    // نام کاربری شناسهٔ ورود است و باید پیام جداگانه داشته باشد؛ سایر یکتایی‌ها مربوط به ایمیل‌اند.
+    // نام کاربری شناسهٔ ورود و عمومی است؛ پیام جداگانه به انتخاب نام دیگر کمک می‌کند.
     if (uniqueTarget(error).includes("username")) {
       sendError(response, 409, "USERNAME_IN_USE", "این نام کاربری قبلاً گرفته شده است.", {
         username: "این نام کاربری قبلاً گرفته شده است.",
       });
       return;
     }
-    sendError(response, 409, "EMAIL_IN_USE", "این ایمیل قبلاً ثبت شده است.", {
-      email: "این ایمیل قبلاً ثبت شده است.",
-    });
+    // ایمیل فقط برای بازیابی گذرواژه است؛ پیام عمومی است تا وجود حساب لو نرود.
+    sendError(
+      response,
+      409,
+      "REGISTRATION_CONFLICT",
+      "ثبت‌نام با این اطلاعات ممکن نیست. اگر قبلاً حساب ساخته‌اید وارد شوید.",
+    );
     return;
   }
   if (dbCode === "P2025") {
