@@ -86,8 +86,11 @@ const budget = (spent, limit) => ({
   left: limit - spent,
   lvl: spent > limit ? 2 : spent >= limit * 0.8 ? 1 : 0,
 });
+// مانده و سهم ماهانه بر اساس موجودی مشتق‌شده از مشارکت‌ها محاسبه می‌شود.
 const goalNeed = (g, t) => {
-  const left = Math.max(0, g.target - g.saved);
+  const saved = DaraGoals.savedOf(g);
+  const target = Number.isSafeInteger(g.target) ? g.target : 0;
+  const left = Math.max(0, target - saved);
   if (!g.date || !left) return { left, m: null, months: 0 };
   const a = jp(t),
     b = jp(g.date),
@@ -161,7 +164,7 @@ const CATS = [
 // حالت اولیه: همه‌چیز خالی است و کاربر خودش مقدار می‌دهد.
 // فقط یک حساب «نقد» با موجودی صفر و چند دسته‌بندی پیش‌فرض وجود دارد.
 const newState = (cur = "تومان") => ({
-  v: 2,
+  v: 3,
   cur,
   accounts: [{ id: uid(), name: "نقد", type: "cash", opening: 0 }],
   cats: CATS.map((c) => ({ id: uid(), name: c[1], kind: "expense" })).concat([
@@ -173,11 +176,21 @@ const newState = (cur = "تومان") => ({
   goals: [],
   rec: [],
 });
-let S;
-try {
-  S = JSON.parse(localStorage.getItem(K));
-} catch {}
-if (!S || S.v !== 2) S = newState();
+// state نسخهٔ ۲ (اهداف با saved) هنگام بارگذاری به مدل مشارکتی مهاجرت می‌کند؛
+// مهاجرت idempotent است و دادهٔ سایر بخش‌ها دست‌نخورده می‌ماند.
+let stateUpgraded = false;
+const loadState = () => {
+  let raw = null;
+  try {
+    raw = JSON.parse(localStorage.getItem(K));
+  } catch {
+    raw = null;
+  }
+  const migrated = DaraGoals.migrateState(raw, today());
+  if (migrated.changed) stateUpgraded = true;
+  return migrated.state ?? newState();
+};
+let S = loadState();
 const persist = () => {
   try {
     localStorage.setItem(K, JSON.stringify(S));
@@ -217,7 +230,18 @@ const pnav = () =>
   `<div class=top><h2 style="margin:0">${fmn(per().b)}</h2><span><button class=b onclick="A.sh(-1)">ماه قبل</button> <button class=b onclick="A.sh(0)">این ماه</button> <button class=b onclick="A.sh(1)">ماه بعد</button></span></div>`;
 const form = (t, f, v, save) => {
   const dl = $("dlg");
-  dl.innerHTML = `<form><h3>${t}</h3>${f.map((x) => `<label>${x.l}${x.t === "sel" ? `<select name=${x.k}>${x.o.map((o) => `<option value="${E(o[0])}"${o[0] == v[x.k] ? " selected" : ""}>${E(o[1])}</option>`).join("")}</select>` : `<input name=${x.k} type="${x.t === "date" ? "date" : "text"}" inputmode="${x.t === "amt" ? "numeric" : "text"}" value="${E(v[x.k] ?? "")}">`}</label>`).join("")}<p class=err id=er></p><div class=acts><button class=pri>ذخیره</button><button type=button class=b onclick="$('dlg').close()">انصراف</button></div></form>`;
+  // فیلدهای پولی همه از همان ورودی مشترک data-money استفاده می‌کنند (فرمت زنده + پیش‌نمایش).
+  const fieldHtml = (x) => {
+    if (x.t === "sel")
+      return `<label>${x.l}<select name=${x.k}>${x.o.map((o) => `<option value="${E(o[0])}"${o[0] == v[x.k] ? " selected" : ""}>${E(o[1])}</option>`).join("")}</select></label>`;
+    if (x.t === "amt") {
+      const amount = DaraGoals.parseMoney(v[x.k]);
+      return `<label>${x.l}<input name=${x.k} inputmode="numeric" autocomplete="off" data-money value="${amount ? E(DaraGoals.formatMoney(amount)) : ""}"></label><small class="money-words" data-money-words aria-live="polite"></small>`;
+    }
+    return `<label>${x.l}<input name=${x.k} type="${x.t === "date" ? "date" : "text"}" value="${E(v[x.k] ?? "")}"></label>`;
+  };
+  dl.innerHTML = `<form><h3>${t}</h3>${f.map(fieldHtml).join("")}<p class=err id=er></p><div class=acts><button class=pri>ذخیره</button><button type=button class=b onclick="$('dlg').close()">انصراف</button></div></form>`;
+  enhanceMoneyInputs(dl);
   const fo = dl.querySelector("form");
   fo.onsubmit = (e) => {
     e.preventDefault();
@@ -347,13 +371,16 @@ window.DARA_IMPORT_TRANSACTIONS = (transactions) =>
     transactions: transactions.map((transaction) => txDto(transaction).transaction),
   });
 // تغییر را فوراً نمایش می‌دهد و اگر ذخیره در سرور شکست خورد، به حالت قبل برمی‌گرداند.
-const cloudWrite = (prevTx, work) =>
+// در حالت مهمان/بدون نشست، هیچ درخواستی فرستاده نمی‌شود و داده فقط در localStorage می‌ماند.
+const cloudWrite = (prevTx, work) => {
+  if (Cloud.status !== "in") return;
   work().catch((e) => {
     S.tx = prevTx;
     persist();
     R();
     alert("ذخیره در پایگاه داده ناموفق بود: " + e.message);
   });
+};
 const cloudSaveTx = (prevTx, t) =>
   cloudWrite(prevTx, () => api("PUT", "/finance/transactions/" + t.id, txDto(t)));
 async function cloudLoad() {
@@ -363,7 +390,10 @@ async function cloudLoad() {
   try {
     local = JSON.parse(localStorage.getItem(K));
   } catch {}
-  S = local && local.v === 2 ? local : newState();
+  // دادهٔ قدیمی همین حساب (v2) پیش از استفاده مهاجرت می‌شود؛ نسخهٔ جدید هرگز با دادهٔ قدیمی بازنویسی نمی‌شود.
+  const migrated = DaraGoals.migrateState(local, today());
+  if (migrated.changed) stateUpgraded = true;
+  S = migrated.state ?? newState();
   // واحد نمایش ذخیره‌شده اگر با ارز اصلی نخواند، به واحد معتبر برمی‌گردد تا مبالغ بدتفسیر نشوند.
   if (!displayUnits().includes(S.cur)) S.cur = displayUnits()[0];
   const f = factor();
@@ -587,68 +617,7 @@ const A = {
     ui.off = k ? ui.off + k : 0;
     R();
   },
-  tx: (id) => {
-    const existing = S.tx.find((t) => t.id === id);
-    const o = existing || {
-      type: "expense",
-      date: today(),
-      acc: S.accounts[0]?.id,
-    };
-    // شناسه یک‌بار و هنگام باز شدن فرم ساخته می‌شود؛ دوبار کلیک، تلاش دوباره یا retry شبکه همان
-    // رکورد را به‌روزرسانی می‌کند و تراکنش تکراری نمی‌سازد.
-    const txId = existing?.id ?? uid();
-    form(
-      id ? "ویرایش تراکنش" : "تراکنش جدید",
-      [
-        {
-          k: "type",
-          l: "نوع",
-          t: "sel",
-          o: [
-            ["expense", "هزینه"],
-            ["income", "درآمد"],
-            ["transfer", "انتقال بین حساب‌ها"],
-          ],
-        },
-        { k: "amount", l: `مبلغ (${S.cur})`, t: "amt" },
-        { k: "date", l: "تاریخ (میلادی در ورودی؛ نمایش شمسی)", t: "date" },
-        { k: "acc", l: "حساب (مبدأ)", t: "sel", o: accO() },
-        { k: "to", l: "حساب مقصد (فقط برای انتقال)", t: "sel", o: accO() },
-        { k: "cat", l: "دسته‌بندی", t: "sel", o: catO() },
-        { k: "desc", l: "توضیح" },
-        { k: "note", l: "یادداشت (اختیاری)" },
-      ],
-      o,
-      (d) => {
-        const a = parseAmt(d.amount);
-        if (!a) return "مبلغ باید یک عدد مثبت باشد.";
-        if (!okDate(d.date)) return "تاریخ معتبر نیست.";
-        if (d.type === "transfer") {
-          if (d.acc === d.to) return "حساب مبدأ و مقصد باید متفاوت باشند.";
-        } else {
-          const c = S.cats.find((c) => c.id === d.cat);
-          if (!c || c.kind !== d.type)
-            return "دسته‌بندی با نوع تراکنش سازگار نیست.";
-        }
-        const tr = d.type === "transfer";
-        const prevTx = S.tx;
-        S.tx = S.tx
-          .filter((x) => x.id !== txId)
-          .concat({
-            id: txId,
-            type: d.type,
-            amount: a,
-            date: d.date,
-            acc: d.acc,
-            to: tr ? d.to : null,
-            cat: tr ? null : d.cat,
-            desc: d.desc.trim(),
-            note: d.note.trim(),
-          });
-        cloudSaveTx(prevTx, S.tx[S.tx.length - 1]);
-      },
-    );
-  },
+  tx: (id) => openTransactionDialog(id),
   dtx: (id) => {
     if (confirm("این تراکنش حذف شود؟")) {
       const prevTx = S.tx;
@@ -668,47 +637,20 @@ const A = {
     persist();
     R();
   },
-  goal: () =>
-    form(
-      "هدف جدید",
-      [
-        { k: "name", l: "نام هدف" },
-        { k: "target", l: "مبلغ هدف", t: "amt" },
-        { k: "saved", l: "مبلغ پس‌انداز‌شده تا امروز (۰ مجاز)", t: "amt" },
-        { k: "date", l: "تاریخ هدف (اختیاری)", t: "date" },
-      ],
-      { saved: "0" },
-      (d) => {
-        const t = parseAmt(d.target),
-          s = parseAmt(d.saved, 1);
-        if (!d.name.trim()) return "نام هدف را وارد کنید.";
-        if (!t) return "مبلغ هدف باید مثبت باشد.";
-        if (s === null) return "مبلغ فعلی معتبر نیست.";
-        if (d.date && (!okDate(d.date) || d.date <= today()))
-          return "تاریخ هدف باید در آینده باشد.";
-        S.goals.push({
-          id: uid(),
-          name: d.name.trim(),
-          target: t,
-          saved: s,
-          date: d.date || "",
-        });
-      },
-    ),
-  add: (id) =>
-    form(
-      "افزودن به پس‌انداز",
-      [{ k: "a", l: "مبلغ واریز", t: "amt" }],
-      {},
-      (d) => {
-        const a = parseAmt(d.a);
-        if (!a) return "مبلغ معتبر نیست.";
-        S.goals.find((g) => g.id === id).saved += a;
-      },
-    ),
+  goal: (id, templateName) => openGoalDialog(id, templateName),
+  add: (goalId) => openContributionDialog(goalId, null),
+  cedit: (goalId, contributionId) => openContributionDialog(goalId, contributionId),
+  cdel: (goalId, contributionId) => {
+    if (!confirm("این پس‌انداز حذف شود؟ مبلغ هدف تغییری نمی‌کند.")) return;
+    S.goals = S.goals.map((goal) =>
+      goal.id === goalId ? DaraGoals.deleteContribution(goal, contributionId) : goal,
+    );
+    persist();
+    R();
+  },
   dg: (id) => {
-    if (confirm("هدف حذف شود؟")) {
-      S.goals = S.goals.filter((g) => g.id !== id);
+    if (confirm("این هدف و تاریخچهٔ پس‌اندازش حذف شود؟")) {
+      S.goals = S.goals.filter((goal) => goal.id !== id);
       persist();
       R();
     }
@@ -804,7 +746,7 @@ const A = {
       ],
       { op: "0" },
       (d) => {
-        const o = parseAmt(d.op, 1);
+        const o = d.op.trim() === "" ? 0 : parseAmt(d.op, 1);
         if (!d.name.trim()) return "نام حساب را وارد کنید.";
         if (o === null) return "موجودی اولیه معتبر نیست.";
         S.accounts.push({
@@ -853,8 +795,9 @@ const A = {
       ],
       {},
       (d) => {
-        if (!d.name.trim()) return "نام را وارد کنید.";
-        S.cats.push({ id: uid(), name: d.name.trim(), kind: d.kind });
+        const error = DaraCategories.validate(d.name, d.kind, S.cats);
+        if (error) return error;
+        S.cats.push(DaraCategories.create(d.name, d.kind, uid()));
       },
     ),
   reset: () => {
@@ -894,11 +837,511 @@ const budRows = (bc, only) =>
     })
     .join("") ||
   none("هنوز بودجه‌ای تعیین نشده است؛ از صفحه بودجه‌ها شروع کنید.");
-const goalRow = (g) => {
-  const n = goalNeed(g, today()),
-    p = Math.min(100, Math.round((g.saved / g.target) * 100));
-  return `<div><div class=row style="border:0;padding:2px 0"><b>${E(g.name)}</b><small>${M(g.saved)} از ${M(g.target)} (${nf.format(p)}٪)</small></div>${bar(p)}<small>${n.left ? `باقی‌مانده ${M(n.left)}` + (n.m ? (n.late ? " — مهلت گذشته؛ مبلغ باقی‌مانده یک‌جا لازم است." : ` · حدود ${M(n.m)} در ماه برای ${nf.format(n.months)} ماه شمسی (بدون سود و تورم)`) : "") : "به هدف رسیده‌اید 🎉"}</small></div>`;
+// ─── اهداف پس‌انداز: اجزای رابط کاربری ────────────────────────────────────────
+const faNum = (value) => nf.format(value);
+
+const openDialog = (html) => {
+  const dialog = $("dlg");
+  dialog.innerHTML = html;
+  enhanceMoneyInputs(dialog);
+  dialog.showModal();
+  return dialog;
 };
+
+const setFieldError = (scope, field, message) => {
+  const element = scope.querySelector(`[data-error="${field}"]`);
+  if (element) element.textContent = message;
+};
+
+// ورودی پول: ارقام فارسی/عربی/لاتین و جداکننده را می‌پذیرد و فقط عدد صحیح را برمی‌گرداند.
+const moneyFieldHtml = (name, label, value) =>
+  `<label>${label}<input name="${name}" inputmode="numeric" autocomplete="off" value="${value ? E(DaraGoals.formatMoney(value)) : ""}" data-money="${name}"></label><small class="money-words" data-money-words="${name}" aria-live="polite"></small><p class="err" data-error="${name}" role="alert"></p>`;
+
+const moneyValue = (input) => (input ? DaraGoals.parseMoney(input.value) : null);
+
+// یک پیاده‌سازی مشترک برای همهٔ ورودی‌های پولی: جداکنندهٔ سه‌رقمی زنده + پیش‌نمایش فارسی.
+// مکان‌نما بر اساس تعداد ارقام قبل از آن حفظ می‌شود تا تایپ/ویرایش طبیعی بماند.
+const formatMoneyInput = (input) => {
+  const words =
+    input.parentElement?.nextElementSibling?.matches?.("[data-money-words]")
+      ? input.parentElement.nextElementSibling
+      : input.nextElementSibling?.matches?.("[data-money-words]")
+        ? input.nextElementSibling
+        : null;
+  const raw = input.value;
+  const caret = input.selectionStart ?? raw.length;
+  const digitsBefore = raw.slice(0, caret).replace(/[^\d۰-۹٠-٩]/g, "").length;
+  const amount = DaraGoals.parseMoney(raw);
+  if (!amount) {
+    if (words) words.textContent = raw.trim() ? "مبلغ معتبر نیست." : "";
+    return;
+  }
+  input.value = DaraGoals.formatMoney(amount);
+  let seen = 0;
+  let position = 0;
+  while (position < input.value.length && seen < digitsBefore) {
+    if (/[0-9]/.test(input.value[position])) seen += 1;
+    position += 1;
+  }
+  input.setSelectionRange(position, position);
+  if (words) words.textContent = DaraGoals.moneyPreview(amount, S.cur);
+};
+
+// هر ورودی data-money را یک‌بار آماده می‌کند و پیش‌نمایش مقدار اولیه را می‌سازد.
+const enhanceMoneyInputs = (scope) => {
+  (scope ?? document).querySelectorAll("input[data-money]").forEach((input) => {
+    if (input.dataset.moneyReady) {
+      const amount = DaraGoals.parseMoney(input.value);
+      const words = input.parentElement?.nextElementSibling;
+      if (words?.matches?.("[data-money-words]") && amount)
+        words.textContent = DaraGoals.moneyPreview(amount, S.cur);
+      return;
+    }
+    input.dataset.moneyReady = "1";
+    let words = input.parentElement?.nextElementSibling;
+    if (!words?.matches?.("[data-money-words]")) {
+      words = document.createElement("small");
+      words.className = "money-words";
+      words.setAttribute("data-money-words", "");
+      words.setAttribute("aria-live", "polite");
+      if (input.parentElement?.parentElement) input.parentElement.after(words);
+    }
+    const amount = DaraGoals.parseMoney(input.value);
+    if (amount) input.value = DaraGoals.formatMoney(amount);
+    if (words) words.textContent = amount ? DaraGoals.moneyPreview(amount, S.cur) : "";
+  });
+};
+
+// یک شنوندهٔ سراسری برای همهٔ فیلدهای پولی (حتی آن‌هایی که بعداً رندر می‌شوند).
+document.addEventListener("input", (event) => {
+  const input = event.target?.closest?.("input[data-money]");
+  if (input) formatMoneyInput(input);
+});
+
+// انتخاب تاریخ شمسی با سه select؛ تعداد روزها با ماه/سال (و کبیسه) هماهنگ می‌شود.
+const datePickerHtml = (iso, options = {}) => {
+  const todayJalali = DaraGoals.isoToJalali(today()) ?? { jy: 1404, jm: 1, jd: 1 };
+  const selected = iso ? DaraGoals.isoToJalali(iso) : null;
+  const active = selected ?? { jy: todayJalali.jy, jm: todayJalali.jm, jd: todayJalali.jd };
+  const yearsBack = options.yearsBack ?? 0;
+  const yearsForward = options.yearsForward ?? 10;
+  const minYear = Math.min(todayJalali.jy - yearsBack, active.jy);
+  const maxYear = Math.max(todayJalali.jy + yearsForward, active.jy);
+  const years = [];
+  for (let year = minYear; year <= maxYear; year += 1) years.push(year);
+  return `<div class="date-picker" data-date-picker>
+    <label>سال<select data-date-year>${years.map((year) => `<option value="${year}"${year === active.jy ? " selected" : ""}>${faNum(year)}</option>`).join("")}</select></label>
+    <label>ماه<select data-date-month>${DaraGoals.JALALI_MONTHS.map((name, index) => `<option value="${index + 1}"${index + 1 === active.jm ? " selected" : ""}>${name}</option>`).join("")}</select></label>
+    <label>روز<select data-date-day data-selected="${active.jd}"></select></label>
+  </div>`;
+};
+
+const bindDatePicker = (scope) => {
+  const yearEl = scope.querySelector("[data-date-year]");
+  const monthEl = scope.querySelector("[data-date-month]");
+  const dayEl = scope.querySelector("[data-date-day]");
+  const fillDays = () => {
+    const length = DaraGoals.jalaliMonthLength(Number(yearEl.value), Number(monthEl.value));
+    // روز انتخاب‌شده (یا روز اولیه از تاریخ موجود) حفظ می‌شود و فقط با طول ماه جدید محدود می‌شود.
+    const previous = Number(dayEl.value) || Number(dayEl.dataset.selected) || 1;
+    const selected = Math.min(previous, length);
+    dayEl.dataset.selected = String(selected);
+    dayEl.innerHTML = Array.from(
+      { length },
+      (_, index) =>
+        `<option value="${index + 1}"${index + 1 === selected ? " selected" : ""}>${faNum(index + 1)}</option>`,
+    ).join("");
+  };
+  yearEl.addEventListener("change", fillDays);
+  monthEl.addEventListener("change", fillDays);
+  fillDays();
+  return {
+    value: () =>
+      DaraGoals.jalaliToIso(Number(yearEl.value), Number(monthEl.value), Number(dayEl.value)),
+    focus: () => yearEl.focus(),
+  };
+};
+
+const openGoalDialog = (id, templateName) => {
+  const existing = id ? S.goals.find((goal) => goal.id === id) : null;
+  if (id && !existing) return;
+  const saved = existing ? DaraGoals.savedOf(existing) : 0;
+  const initialDate = existing ? existing.date : addDays(today(), 90);
+  const dialog = openDialog(`<form novalidate>
+    <h3>${existing ? "ویرایش هدف" : "هدف جدید"}</h3>
+    <label>نام هدف<input name="name" maxlength="100" value="${E(existing ? existing.name : (templateName || ""))}"></label>
+    <p class="err" data-error="name" role="alert"></p>
+    ${moneyFieldHtml("target", "مبلغ هدف", existing ? existing.target : null)}
+    <fieldset class="goal-date"><legend>تاریخ هدف (اختیاری)</legend>
+      <label class="phase5-check"><input type="checkbox" data-no-date${existing && !existing.date ? " checked" : ""}> بدون تاریخ هدف</label>
+      <div data-date-wrap>${datePickerHtml(initialDate)}</div>
+      <p class="err" data-error="date" role="alert"></p>
+    </fieldset>
+    <label>اولویت هدف<select name="priority">${priorityOptions(existing ? existing.priority : DaraGoals.DEFAULT_PRIORITY)}</select></label>
+    <p class="mu">${saved ? `پس‌انداز فعلی: ${M(saved)} — مبلغ هدف نمی‌تواند کمتر از آن باشد.` : "پس‌اندازها از تاریخچهٔ مشارکت‌ها محاسبه می‌شوند."}</p>
+    <div class="acts"><button class="pri">ذخیره</button><button type="button" class="b" data-cancel>انصراف</button></div>
+  </form>`);
+  const form = dialog.querySelector("form");
+  const nameInput = form.querySelector('[name="name"]');
+  const targetInput = dialog.querySelector('[data-money="target"]');
+  const dateWrap = dialog.querySelector("[data-date-wrap]");
+  const picker = bindDatePicker(dateWrap);
+  const noDate = dialog.querySelector("[data-no-date]");
+  const syncDate = () => {
+    dateWrap.hidden = noDate.checked;
+  };
+  noDate.addEventListener("change", syncDate);
+  syncDate();
+  dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const name = nameInput.value.trim();
+    const target = moneyValue(targetInput);
+    const chosenDate = noDate.checked ? "" : picker.value();
+    setFieldError(dialog, "name", name ? "" : "نام هدف را وارد کنید.");
+    setFieldError(dialog, "target", target ? "" : "مبلغ هدف باید عدد صحیح و بزرگ‌تر از صفر باشد.");
+    setFieldError(
+      dialog,
+      "date",
+      noDate.checked || (chosenDate && chosenDate > today())
+        ? ""
+        : "تاریخ هدف باید در آینده باشد.",
+    );
+    if (!name) {
+      nameInput.focus();
+      return;
+    }
+    if (!target) {
+      money.focus();
+      return;
+    }
+    if (target < saved) {
+      setFieldError(dialog, "target", "مبلغ هدف نمی‌تواند کمتر از مبلغ پس‌اندازشده باشد.");
+      money.focus();
+      return;
+    }
+    if (!noDate.checked && !chosenDate) {
+      setFieldError(dialog, "date", "تاریخ انتخابی معتبر نیست.");
+      picker.focus();
+      return;
+    }
+    const priority = DaraGoals.normalizePriority(
+      dialog.querySelector('[name="priority"]').value,
+    );
+    if (existing)
+      S.goals = S.goals.map((goal) =>
+        goal.id === existing.id
+          ? DaraGoals.updateGoal(goal, { name, target, date: chosenDate, priority })
+          : goal,
+      );
+    else
+      S.goals = [
+        ...S.goals,
+        DaraGoals.createGoal(
+          { name, target, date: chosenDate, priority },
+          { id: uid(), todayIso: today() },
+        ),
+      ];
+    persist();
+    dialog.close();
+    R();
+  };
+  nameInput.focus();
+};
+
+const openContributionDialog = (goalId, contributionId) => {
+  const goal = S.goals.find((entry) => entry.id === goalId);
+  if (!goal) return;
+  const existing = contributionId
+    ? (goal.contributions || []).find((contribution) => contribution.id === contributionId)
+    : null;
+  const dialog = openDialog(`<form novalidate>
+    <h3>${existing ? "ویرایش پس‌انداز" : "ثبت پس‌انداز"}</h3>
+    <p class="mu">${E(goal.name)}</p>
+    ${moneyFieldHtml("amount", "مبلغ پس‌انداز", existing ? existing.amount : null)}
+    <fieldset class="goal-date"><legend>تاریخ پس‌انداز</legend>
+      ${datePickerHtml(existing ? existing.date : today(), { yearsBack: 10, yearsForward: 0 })}
+      <p class="err" data-error="date" role="alert"></p>
+    </fieldset>
+    <label>یادداشت (اختیاری)<input name="note" maxlength="200" value="${E(existing ? existing.note : "")}"></label>
+    <p class="mu">ثبت پس‌انداز، تراکنش درآمد یا هزینه نمی‌سازد و موجودی حساب‌ها را تغییر نمی‌دهد.</p>
+    <div class="acts"><button class="pri">ذخیره</button><button type="button" class="b" data-cancel>انصراف</button></div>
+  </form>`);
+  const form = dialog.querySelector("form");
+  const amountInput = dialog.querySelector('[data-money="amount"]');
+  const picker = bindDatePicker(dialog.querySelector("[data-date-picker]"));
+  dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const amount = moneyValue(amountInput);
+    const date = picker.value();
+    setFieldError(dialog, "amount", amount ? "" : "مبلغ پس‌انداز باید عدد صحیح و بزرگ‌تر از صفر باشد.");
+    setFieldError(dialog, "date", date && date <= today() ? "" : "تاریخ پس‌انداز نمی‌تواند در آینده باشد.");
+    if (!amount) {
+      money.focus();
+      return;
+    }
+    if (!date || date > today()) {
+      picker.focus();
+      return;
+    }
+    const note = form.querySelector('[name="note"]').value.trim();
+    if (existing) {
+      S.goals = S.goals.map((entry) =>
+        entry.id === goalId
+          ? DaraGoals.updateContribution(entry, existing.id, { amount, date, note })
+          : entry,
+      );
+    } else {
+      S.goals = S.goals.map((entry) =>
+        entry.id === goalId
+          ? DaraGoals.addContribution(entry, { id: uid(), amount, date, note })
+          : entry,
+      );
+    }
+    persist();
+    dialog.close();
+    R();
+  };
+  money.focus();
+};
+
+const GOAL_PRIORITY_LABELS = {
+  1: "اولویت پایین",
+  2: "اولویت متوسط",
+  3: "اولویت بالا",
+  4: "اولویت خیلی بالا",
+};
+
+const priorityOptions = (selected) =>
+  DaraGoals.PRIORITIES.map(
+    (value) =>
+      `<option value="${value}"${DaraGoals.normalizePriority(selected) === value ? " selected" : ""}>${GOAL_PRIORITY_LABELS[value]}</option>`,
+  ).join("");
+
+// ─── فرم تراکنش: دسته‌بندی وابسته به نوع + افزودن دستهٔ جدید ─────────────────
+const TRANSACTION_TYPES = [
+  ["expense", "هزینه"],
+  ["income", "درآمد"],
+  ["transfer", "انتقال بین حساب‌ها"],
+];
+
+const accountOptions = (selected) =>
+  accO()
+    .map(
+      ([id, name]) => `<option value="${E(id)}"${id === selected ? " selected" : ""}>${E(name)}</option>`,
+    )
+    .join("");
+
+const categoryOptions = (kind, selected) =>
+  DaraCategories.ofKind(S.cats, kind)
+    .map(
+      (category) =>
+        `<option value="${E(category.id)}"${category.id === selected ? " selected" : ""}>${E(category.name)}</option>`,
+    )
+    .join("");
+
+const openTransactionDialog = (id) => {
+  const existing = id ? S.tx.find((transaction) => transaction.id === id) : null;
+  const initial = existing || {
+    type: "expense",
+    date: today(),
+    acc: S.accounts[0]?.id,
+    to: S.accounts[1]?.id,
+    cat: "",
+  };
+  // شناسه یک‌بار و هنگام باز شدن فرم ساخته می‌شود؛ دوبار کلیک یا retry همان رکورد را می‌نویسد.
+  const txId = existing?.id ?? uid();
+  const dialog = openDialog(`<form novalidate>
+    <h3>${existing ? "ویرایش تراکنش" : "تراکنش جدید"}</h3>
+    <label>نوع<select name="type" data-type>${TRANSACTION_TYPES.map(([value, label]) => `<option value="${value}"${value === initial.type ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label>مبلغ (${E(S.cur)})<input name="amount" inputmode="numeric" autocomplete="off" data-money="amount" value="${existing ? E(DaraGoals.formatMoney(existing.amount)) : ""}"></label>
+    <small class="money-words" data-money-words aria-live="polite"></small>
+    <label>تاریخ (میلادی در ورودی؛ نمایش شمسی)<input name="date" type="date" value="${E(initial.date || today())}"></label>
+    <label>حساب (مبدأ)<select name="acc" data-acc>${accountOptions(initial.acc)}</select></label>
+    <label data-target-wrap>حساب مقصد<select name="to" data-to>${accountOptions(initial.to)}</select></label>
+    <div data-category-wrap>
+      <label>دسته‌بندی<select name="cat" data-cat></select></label>
+      <button type="button" class="b" data-new-category>+ افزودن دسته‌بندی جدید</button>
+      <div data-new-category-box hidden>
+        <label>نام دسته‌بندی جدید<input name="newCategory" maxlength="80" autocomplete="off"></label>
+        <p class="err" data-error="newCategory" role="alert"></p>
+        <div class="acts"><button type="button" class="b" data-add-category>افزودن</button><button type="button" class="b" data-cancel-category>انصراف</button></div>
+      </div>
+    </div>
+    <label>توضیح<input name="desc" maxlength="200" value="${E(existing?.desc ?? "")}"></label>
+    <label>یادداشت (اختیاری)<input name="note" maxlength="1000" value="${E(existing?.note ?? "")}"></label>
+    <p class="err" data-error="form" role="alert"></p>
+    <div class="acts"><button class="pri">ذخیره</button><button type="button" class="b" data-cancel>انصراف</button></div>
+  </form>`);
+  const form = dialog.querySelector("form");
+  const typeSelect = dialog.querySelector("[data-type]");
+  const categoryWrap = dialog.querySelector("[data-category-wrap]");
+  const targetWrap = dialog.querySelector("[data-target-wrap]");
+  const categorySelect = dialog.querySelector("[data-cat]");
+  const newBox = dialog.querySelector("[data-new-category-box]");
+  const newInput = newBox.querySelector('[name="newCategory"]');
+
+  // با تغییر نوع، فیلدهای نامرتبط پنهان و دسته‌بندی‌ها به همان نوع محدود می‌شوند.
+  const syncType = () => {
+    const type = typeSelect.value;
+    const transfer = type === "transfer";
+    targetWrap.hidden = !transfer;
+    categoryWrap.hidden = transfer;
+    if (transfer) return;
+    const previous = categorySelect.value;
+    categorySelect.innerHTML = categoryOptions(type, previous);
+    const stillValid = DaraCategories.ofKind(S.cats, type).some((category) => category.id === previous);
+    if (stillValid) categorySelect.value = previous;
+  };
+  typeSelect.addEventListener("change", syncType);
+  categorySelect.innerHTML = categoryOptions(initial.type, initial.cat);
+  syncType();
+
+  dialog.querySelector("[data-new-category]").onclick = () => {
+    newBox.hidden = false;
+    newInput.focus();
+  };
+  dialog.querySelector("[data-cancel-category]").onclick = () => {
+    newBox.hidden = true;
+    newInput.value = "";
+    setFieldError(dialog, "newCategory", "");
+  };
+  dialog.querySelector("[data-add-category]").onclick = () => {
+    const type = typeSelect.value;
+    if (type === "transfer") return;
+    const error = DaraCategories.validate(newInput.value, type, S.cats);
+    setFieldError(dialog, "newCategory", error || "");
+    if (error) {
+      newInput.focus();
+      return;
+    }
+    const category = DaraCategories.create(newInput.value, type, uid());
+    S.cats.push(category);
+    // دسته‌بندی فوراً ذخیره و با فضای کاری همگام می‌شود تا بعد از رفرش بماند.
+    persist();
+    categorySelect.innerHTML = categoryOptions(type, category.id);
+    newInput.value = "";
+    newBox.hidden = true;
+  };
+
+  dialog.querySelector("[data-cancel]").onclick = () => dialog.close();
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const type = typeSelect.value;
+    const amount = moneyValue(dialog.querySelector('[data-money="amount"]'));
+    const date = form.querySelector('[name="date"]').value;
+    const acc = form.querySelector("[data-acc]").value;
+    const to = form.querySelector("[data-to]").value;
+    const categoryId = categorySelect.value;
+    const fail = (message, field) => {
+      setFieldError(dialog, "form", message);
+      field?.focus?.();
+    };
+    if (!amount) return fail("مبلغ باید یک عدد صحیح مثبت باشد.", dialog.querySelector('[data-money="amount"]'));
+    if (!okDate(date)) return fail("تاریخ معتبر نیست.", form.querySelector('[name="date"]'));
+    if (type === "transfer") {
+      if (!to || to === acc) return fail("حساب مبدأ و مقصد باید متفاوت باشند.");
+    } else {
+      const category = DaraCategories.findById(S.cats, categoryId);
+      if (!category || category.kind !== type)
+        return fail("دسته‌بندی با نوع تراکنش سازگار نیست.", categorySelect);
+    }
+    const transfer = type === "transfer";
+    const prevTx = S.tx;
+    S.tx = S.tx
+      .filter((transaction) => transaction.id !== txId)
+      .concat({
+        id: txId,
+        type,
+        amount,
+        date,
+        acc,
+        to: transfer ? to : null,
+        cat: transfer ? null : categoryId,
+        desc: form.querySelector('[name="desc"]').value.trim(),
+        note: form.querySelector('[name="note"]').value.trim(),
+      });
+    cloudSaveTx(prevTx, S.tx[S.tx.length - 1]);
+    persist();
+    dialog.close();
+    R();
+  };
+  const amountInput = dialog.querySelector('[data-money="amount"]');
+  amountInput.focus();
+};
+
+const contributionRow = (goalId, contribution) =>
+  `<li class="row contrib-row"><div><b>${M(contribution.amount)}</b>${contribution.note ? `<small>${E(contribution.note)}</small>` : ""}${contribution.invalid ? '<small class="neg">این مشارکت نامعتبر است و در جمع حساب نمی‌شود.</small>' : ""}</div><small>${contribution.date ? fd(contribution.date) : "بدون تاریخ"}</small><span><button class="b" onclick="A.cedit('${goalId}','${contribution.id}')">ویرایش</button> <button class="b" onclick="A.cdel('${goalId}','${contribution.id}')">حذف</button></span></li>`;
+
+const goalContributions = (goal) => {
+  const items = DaraGoals.sortContributions(goal.contributions || []);
+  if (!items.length) return `<p class="mu">هنوز پس‌اندازی ثبت نشده است.</p>`;
+  return `<ul class="contrib-list">${items.map((contribution) => contributionRow(goal.id, contribution)).join("")}</ul>`;
+};
+
+const GOAL_STATUS_LABELS = {
+  completed: "تکمیل‌شده",
+  ahead: "جلوتر از برنامه",
+  on_track: "طبق برنامه",
+  behind: "عقب‌تر از برنامه",
+  unknown: "وضعیت نامشخص",
+};
+
+// متن تخمین: تاریخ ساختگی نمی‌سازد و تخمینی‌بودن را صریح اعلام می‌کند.
+const goalEstimateText = (estimate, status) => {
+  if (status.status === "completed") return "این هدف تکمیل شده است.";
+  if (estimate.reason === "ok" && estimate.date)
+    return `تخمین تکمیل (تخمینی، نه تضمینی): ${fd(estimate.date)} · میانگین سه ماه اخیر ${M(estimate.monthlyAverage)} در ماه`;
+  if (estimate.reason === "too_far") return "با نرخ پس‌انداز فعلی، تخمین در بازهٔ معقول نیست.";
+  return "برای تخمین زمان تکمیل، اطلاعات کافی از پس‌اندازهای اخیر وجود ندارد.";
+};
+
+const goalCard = (goal) => {
+  const progress = DaraGoals.progressOf(goal);
+  const status = DaraGoals.goalStatus(goal, today());
+  const estimate = DaraGoals.estimateCompletion(goal, today());
+  const need = goalNeed(goal, today());
+  const actions = `<span><button class="b" onclick="A.goal('${goal.id}')">ویرایش هدف</button> <button class="b" onclick="A.dg('${goal.id}')">حذف</button></span>`;
+  const head = `<div class="top"><h3 style="margin:0">${E(goal.name)}</h3>${actions}</div>`;
+  if (!progress)
+    return `<section class="card goal-card">${head}<p class="err">مبلغ هدف این هدف نامعتبر است؛ آن را ویرایش کنید.</p>${goalContributions(goal)}</section>`;
+  const priority = DaraGoals.normalizePriority(goal.priority);
+  const badge = `<span class="tag goal-status goal-status-${status.status}">${GOAL_STATUS_LABELS[status.status]}</span> <span class="tag goal-priority goal-priority-${priority}">${GOAL_PRIORITY_LABELS[priority]}</span>`;
+  const remaining = progress.completed ? "به هدف رسیده‌اید 🎉" : `مانده ${M(progress.remaining)}`;
+  const monthly = !progress.completed && need.m ? ` · حدود ${M(need.m)} در ماه` : "";
+  const deadline = goal.date ? ` · تاریخ هدف ${fd(goal.date)}` : "";
+  const late = status.late && !progress.completed ? " · مهلت گذشته است" : "";
+  const expected =
+    !progress.completed && status.expectedPercent !== null
+      ? `<small class="goal-expected">پیشرفت مورد انتظار تا امروز: ${faNum(status.expectedPercent)}٪</small>`
+      : "";
+  return `<section class="card goal-card">${head}
+    <p class="goal-amounts"><b>${M(progress.saved)}</b> از <b>${M(goal.target)}</b> <span class="goal-percent">${faNum(progress.percent)}٪</span> ${badge}</p>
+    ${bar(progress.percent)}
+    ${expected}
+    <small>${remaining}${monthly}${deadline}${late}</small>
+    <small class="goal-estimate">${goalEstimateText(estimate, status)}</small>
+    <button class="b goal-add" onclick="A.add('${goal.id}')">+ ثبت پس‌انداز</button>
+    <h4 class="goal-history-title">تاریخچهٔ پس‌انداز</h4>
+    ${goalContributions(goal)}
+  </section>`;
+};
+
+// خلاصهٔ هدف در داشبورد: موجودی از مشارکت‌ها محاسبه می‌شود.
+const goalSummaryRow = (goal) => {
+  const progress = DaraGoals.progressOf(goal);
+  if (!progress)
+    return `<div class="row"><div><b>${E(goal.name)}</b><small class="neg">مبلغ هدف نامعتبر است</small></div></div>`;
+  return `<div><div class="row" style="border:0;padding:2px 0"><span>${E(goal.name)}</span><small>${M(progress.saved)} از ${M(goal.target)} (${faNum(progress.percent)}٪)</small></div>${bar(progress.percent)}</div>`;
+};
+
+const goalsEmpty = () => `<section class="card goal-empty">
+  <h3>اولین هدف پس‌اندازتان را بسازید</h3>
+  <p class="mu">هدف پس‌انداز یک مقصد مالی است: مبلغ هدف را تعیین می‌کنید و هر بار که پس‌انداز می‌کنید، پیشرفت ثبت می‌شود. این کار تراکنش درآمد یا هزینه نمی‌سازد.</p>
+  <p class="mu">برای شروع یکی از قالب‌ها را انتخاب کنید؛ فقط نام هدف پر می‌شود و مبلغ و تاریخ را خودتان تعیین می‌کنید.</p>
+  <div class="goal-templates">${DaraGoals.GOAL_TEMPLATES.map((name) => `<button class="b" onclick="A.goal(null, '${name}')">${name}</button>`).join("")}</div>
+</section>`;
 const recUp = () =>
   S.rec
     .filter((r) => r.next <= addDays(today(), 30))
@@ -940,7 +1383,7 @@ const pages = {
     });
     return (
       pnav() +
-      `<div class=g>${kpi("موجودی کل حساب‌ها", M(sum(bl)))}${kpi("درآمد", M(T.i), "pos")}${kpi("هزینه", M(T.e), "neg")}${kpi("جریان نقدی خالص", M(T.n), T.n >= 0 ? "pos" : "neg")}</div><div class=g>${card("هزینه به تفکیک دسته", cs.map(([c, v]) => `<div class=row style="border:0;padding:2px 0"><span>${E(cn(c))}</span><small>${M(v)}</small></div>${bar((v / mx) * 100)}`).join("") || none("در این ماه هزینه‌ای ثبت نشده است."))}${card("بودجه‌ها", budRows(bc))}${card("اهداف پس‌انداز", S.goals.map(goalRow).join("") || none("هنوز هدفی نساخته‌اید."))}${card("سررسیدهای پیش‌رو", `<ul>${recUp()}</ul>`)}</div>${card("بینش‌ها", ins.length ? `<ul>${ins.map((i) => `<li class=row>${i}</li>`).join("")}</ul>` : none("با ثبت چند تراکنش، بینش‌ها اینجا ظاهر می‌شوند."))}${ui.off === 0 ? fcHtml() : ""}${card(
+      `<div class=g>${kpi("موجودی کل حساب‌ها", M(sum(bl)))}${kpi("درآمد", M(T.i), "pos")}${kpi("هزینه", M(T.e), "neg")}${kpi("جریان نقدی خالص", M(T.n), T.n >= 0 ? "pos" : "neg")}</div><div class=g>${card("هزینه به تفکیک دسته", cs.map(([c, v]) => `<div class=row style="border:0;padding:2px 0"><span>${E(cn(c))}</span><small>${M(v)}</small></div>${bar((v / mx) * 100)}`).join("") || none("در این ماه هزینه‌ای ثبت نشده است."))}${card("بودجه‌ها", budRows(bc))}${card("اهداف پس‌انداز", S.goals.map(goalSummaryRow).join("") || none("هنوز هدفی نساخته‌اید."))}${card("سررسیدهای پیش‌رو", `<ul>${recUp()}</ul>`)}</div>${card("بینش‌ها", ins.length ? `<ul>${ins.map((i) => `<li class=row>${i}</li>`).join("")}</ul>` : none("با ثبت چند تراکنش، بینش‌ها اینجا ظاهر می‌شوند."))}${ui.off === 0 ? fcHtml() : ""}${card(
         "آخرین تراکنش‌ها",
         `<ul>${
           S.tx
@@ -992,7 +1435,7 @@ const pages = {
           .filter((c) => c.kind === "expense")
           .map(
             (c) =>
-              `<label>${E(c.name)}<input inputmode=numeric value="${S.budgets[c.id] || ""}" placeholder="سقف به ${S.cur}" onchange="A.bud('${c.id}',this.value)"></label>`,
+              `<label>${E(c.name)}<input inputmode=numeric data-money value="${S.budgets[c.id] ? DaraGoals.formatMoney(S.budgets[c.id]) : ""}" placeholder="سقف به ${S.cur}" onchange="A.bud('${c.id}',this.value)"></label>`,
           )
           .join(""),
       ) +
@@ -1000,17 +1443,8 @@ const pages = {
     );
   },
   goals() {
-    return (
-      `<div class=top><h2 style="margin:0">اهداف پس‌انداز</h2><button class=pri onclick="A.goal()">+ هدف جدید</button></div>` +
-      (S.goals
-        .map(
-          (g) =>
-            `<section class=card>${goalRow(g)}<p><button class=b onclick="A.add('${g.id}')">افزودن مبلغ</button> <button class=b onclick="A.dg('${g.id}')">حذف</button></p></section>`,
-        )
-        .join("") ||
-        none("هنوز هدفی ندارید. یک هدف بسازید تا سهم ماهانه‌اش محاسبه شود.")) +
-      `<small>سهم ماهانه = مبلغ باقی‌مانده ÷ تعداد ماه‌های شمسی تا تاریخ هدف (حداقل ۱)، بدون سود و تورم. مبلغ هدف مستقل از موجودی حساب‌هاست.</small>`
-    );
+    const help = `<details class="goal-help"><summary>سهم ماهانه چگونه محاسبه می‌شود؟</summary><p>سهم ماهانه = مانده ÷ تعداد ماه‌های شمسی تا تاریخ هدف (حداقل ۱)، بدون سود و تورم. مبلغ هدف مستقل از موجودی حساب‌هاست و ثبت پس‌انداز، تراکنش درآمد یا هزینه نمی‌سازد.</p></details>`;
+    return `<div class="top"><h2 style="margin:0">اهداف پس‌انداز</h2><button class="pri" onclick="A.goal()">+ هدف جدید</button></div>${help}${S.goals.length ? S.goals.map(goalCard).join("") : goalsEmpty()}`;
   },
   rec() {
     return `<div class=top><h2 style="margin:0">تراکنش‌های تکرارشونده</h2><button class=pri onclick="A.rec()">+ قانون جدید</button></div><section class=card><ul>${S.rec.map((r) => `<li class=row><div><b>${E(r.name)}</b><small>${r.freq === "weekly" ? "هفتگی" : "ماهانه"} · بعدی: ${fd(r.next)}${r.next <= today() ? " · سررسید شده" : ""}</small></div><span class="${r.type === "income" ? "pos" : "neg"}">${M(r.amount)}</span><span><button class=b onclick="A.post('${r.id}')">ثبت تراکنش</button> <button class=b onclick="A.dr('${r.id}')">حذف</button></span></li>`).join("") || none("قانونی ثبت نشده است.")}</ul></section><small>تراکنشی به‌طور خودکار ساخته نمی‌شود: با «ثبت تراکنش» یک تراکنش ساخته و سررسید بعدی یک دوره جلو می‌رود، پس تکرار دوباره‌ای رخ نمی‌دهد.</small>`;
@@ -1137,6 +1571,7 @@ function R() {
   if (Cloud.status !== "in" && Cloud.status !== "guest") {
     $("nav").innerHTML = "<b>دارا</b>";
     $("m").innerHTML = authPage();
+    enhanceMoneyInputs($("m"));
     return;
   }
   window.DARA_APP_STATE = S;
@@ -1158,11 +1593,14 @@ function R() {
     (Cloud.syncError
       ? `<section class="card" role="alert"><p>همگام‌سازی داده با سرور ناموفق بود: ${E(Cloud.syncError)}</p><button class="b" onclick="A.retryWorkspace()">تلاش دوباره</button></section>`
       : "") + pages[ui.page === "goals" ? "goals" : ui.page]();
+  enhanceMoneyInputs($("m"));
 }
 window.DARA_RENDER = R;
 if (new URLSearchParams(location.search).get("preview") === "1") {
   Cloud.status = "guest";
   R();
+  // مهاجرت state در حافظه انجام شده؛ یک‌بار ذخیره می‌شود تا نسخهٔ ۳ پایدار بماند.
+  if (stateUpgraded) persist();
 } else {
   R();
   cloudBoot();

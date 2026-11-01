@@ -379,3 +379,196 @@ test("local notifications are deduplicated and preference-controlled", async ({ 
   await page.getByRole("button", { name: "خواندم" }).first().click();
   await expect(page.getByText("خوانده‌شده", { exact: true })).toBeVisible();
 });
+
+test("savings goals: create from a template, then add, edit and delete contributions", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+  await expect(page.getByRole("heading", { name: "اهداف پس‌انداز" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "اولین هدف پس‌اندازتان را بسازید" })).toBeVisible();
+
+  await page.getByRole("button", { name: "سفر", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("نام هدف")).toHaveValue("سفر");
+  await dialog.getByLabel("مبلغ هدف").fill("60000000");
+  await expect(dialog.getByText("شصت میلیون تومان")).toBeVisible();
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+
+  const goalCard = page.locator(".goal-card");
+  await expect(goalCard).toContainText("۶۰٬۰۰۰٬۰۰۰ تومان");
+  await expect(goalCard).toContainText("۰٪");
+
+  await goalCard.getByRole("button", { name: "+ ثبت پس‌انداز" }).click();
+  await dialog.getByLabel("مبلغ پس‌انداز").fill("10000000");
+  await dialog.getByLabel("یادداشت (اختیاری)").fill("پاداش");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(goalCard).toContainText("۱۶٪");
+  await expect(goalCard).toContainText("پاداش");
+  await expect(goalCard.locator(".contrib-row")).toHaveCount(1);
+  // هدف تازه‌ساخته پیشرفت ۱۶٪ با انتظار ۰٪ دارد ⇒ جلوتر از برنامه؛ تاریخچه کافی برای تخمین نیست.
+  await expect(goalCard.getByText("جلوتر از برنامه")).toBeVisible();
+  await expect(goalCard).toContainText("اطلاعات کافی از پس‌اندازهای اخیر وجود ندارد");
+
+  await goalCard.getByRole("button", { name: "ویرایش هدف" }).click();
+  await dialog.getByLabel("نام هدف").fill("سفر نوروز");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(page.locator(".goal-card").filter({ hasText: "سفر نوروز" })).toHaveCount(1);
+
+  await page.locator(".contrib-row").first().getByRole("button", { name: "ویرایش" }).click();
+  await dialog.getByLabel("مبلغ پس‌انداز").fill("20000000");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(goalCard).toContainText("۳۳٪");
+
+  page.once("dialog", (confirmation) => confirmation.accept());
+  await page.locator(".contrib-row").first().getByRole("button", { name: "حذف" }).click();
+  await expect(goalCard).toContainText("هنوز پس‌اندازی ثبت نشده است.");
+  await expect(goalCard).toContainText("۰٪");
+});
+
+test("legacy saved goals migrate to contributions without data loss", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "dara.v2.preview",
+      JSON.stringify({
+        v: 2,
+        cur: "تومان",
+        accounts: [{ id: "a1", name: "نقد", type: "cash", opening: 0 }],
+        cats: [],
+        tx: [],
+        budgets: {},
+        rec: [],
+        goals: [{ id: "legacy-goal", name: "هدف قدیمی", target: 5000000, saved: 2000000, date: "" }],
+      }),
+    );
+  });
+  await page.goto("/legacy/index.html?preview=1");
+  // داشبورد نیز باید هدف مهاجرت‌شده را با موجودی مشتق‌شده نشان دهد.
+  const dashboardGoals = page.locator(".card").filter({ hasText: "اهداف پس‌انداز" });
+  await expect(dashboardGoals).toContainText("هدف قدیمی");
+  await expect(dashboardGoals).toContainText("۲٬۰۰۰٬۰۰۰ تومان");
+
+  await page.getByRole("button", { name: "اهداف" }).click();
+  await expect(page.getByRole("heading", { name: "هدف قدیمی" })).toBeVisible();
+  await expect(page.locator(".goal-card")).toContainText("۲٬۰۰۰٬۰۰۰ تومان");
+  await expect(page.locator(".goal-card")).toContainText("وضعیت نامشخص");
+  await expect(page.locator(".goal-card")).toContainText("اطلاعات کافی از پس‌اندازهای اخیر وجود ندارد");
+  await expect(page.locator(".contrib-row")).toHaveCount(1);
+  await expect(page.locator(".contrib-row")).toContainText("موجودی اولیه");
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("dara.v2.preview") ?? "null"),
+  );
+  expect(stored.v).toBe(3);
+  expect(stored.goals[0].saved).toBeUndefined();
+  expect(stored.goals[0].contributions).toHaveLength(1);
+});
+
+test("transaction form filters categories by type, accepts a custom category and formats money", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "تراکنش‌ها" }).click();
+  await page.getByRole("button", { name: "+ تراکنش جدید" }).click();
+
+  const dialog = page.getByRole("dialog");
+  const category = dialog.getByLabel("دسته‌بندی");
+  // هزینه: فقط دسته‌های هزینه
+  await expect(category.locator("option", { hasText: "خوراک" })).toHaveCount(1);
+  await expect(category.locator("option", { hasText: "حقوق" })).toHaveCount(0);
+
+  // درآمد: فقط دسته‌های درآمد
+  await dialog.getByLabel("نوع").selectOption("income");
+  await expect(category.locator("option", { hasText: "حقوق" })).toHaveCount(1);
+  await expect(category.locator("option", { hasText: "خوراک" })).toHaveCount(0);
+
+  // انتقال: بدون دسته‌بندی و با حساب مقصد
+  await dialog.getByLabel("نوع").selectOption("transfer");
+  await expect(dialog.locator("[data-category-wrap]")).toBeHidden();
+  await expect(dialog.locator("[data-target-wrap]")).toBeVisible();
+
+  // بازگشت به هزینه + فرمت زندهٔ پول
+  await dialog.getByLabel("نوع").selectOption("expense");
+  const amount = dialog.getByLabel(/^مبلغ/);
+  await amount.fill("1000000");
+  // جداکنندهٔ هزارگان فارسی (هم‌سو با Intl fa-IR در بقیهٔ برنامه) و پیش‌نمایش متنی.
+  await expect(amount).toHaveValue("1٬000٬000");
+  await expect(dialog.getByText("یک میلیون تومان")).toBeVisible();
+
+  // افزودن دستهٔ جدید و انتخاب فوری
+  await dialog.getByRole("button", { name: "+ افزودن دسته‌بندی جدید" }).click();
+  const box = dialog.locator("[data-new-category-box]");
+  const newName = box.getByLabel("نام دسته‌بندی جدید");
+  await newName.fill("  هدیه  ");
+  await box.getByRole("button", { name: "افزودن", exact: true }).click();
+  await expect(category.locator("option:checked")).toHaveText("هدیه");
+
+  // تکرار همان نام در همان نوع رد می‌شود
+  await dialog.getByRole("button", { name: "+ افزودن دسته‌بندی جدید" }).click();
+  await newName.fill("هدیه");
+  await box.getByRole("button", { name: "افزودن", exact: true }).click();
+  await expect(box.getByText("دسته‌بندی‌ای با این نام در همین نوع وجود دارد.")).toBeVisible();
+  await box.getByRole("button", { name: "انصراف" }).click();
+
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  // ردیف تراکنش‌ها (نه گزینهٔ پنهان دیالوگ بسته‌شده)
+  const transactionRow = page.locator("main li.row").filter({ hasText: "هدیه" });
+  await expect(transactionRow).toHaveCount(1);
+  await expect(transactionRow).toContainText("۱٬۰۰۰٬۰۰۰ تومان");
+
+  const state = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("dara.v2.preview") ?? "null"),
+  );
+  expect(state.tx).toHaveLength(1);
+  expect(state.tx[0].amount).toBe(1000000);
+  expect(state.tx[0].cat).toBeTruthy();
+  expect(state.cats.some((entry) => entry.name === "هدیه" && entry.kind === "expense")).toBe(true);
+
+  // دستهٔ ساخته‌شده در فرم بعدی هم هست و به نوع خودش محدود است
+  await page.getByRole("button", { name: "+ تراکنش جدید" }).click();
+  await expect(category.locator("option", { hasText: "هدیه" })).toHaveCount(1);
+  await dialog.getByLabel("نوع").selectOption("income");
+  await expect(category.locator("option", { hasText: "هدیه" })).toHaveCount(0);
+});
+
+test("goals support priority levels with a backward-compatible default", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+
+  await page.getByRole("button", { name: "+ هدف جدید" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("اولویت هدف")).toHaveValue("2");
+  await dialog.getByLabel("نام هدف").fill("خرید لپ‌تاپ");
+  await dialog.getByLabel("مبلغ هدف").fill("50000000");
+  await dialog.getByLabel("اولویت هدف").selectOption("4");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+
+  const card = page.locator(".goal-card");
+  await expect(card).toContainText("اولویت خیلی بالا");
+  await expect(card.locator(".goal-priority-4")).toBeVisible();
+
+  await card.getByRole("button", { name: "ویرایش هدف" }).click();
+  await expect(dialog.getByLabel("اولویت هدف")).toHaveValue("4");
+  await dialog.getByLabel("اولویت هدف").selectOption("1");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(card).toContainText("اولویت پایین");
+
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+  await expect(page.locator(".goal-card")).toContainText("اولویت پایین");
+});
+
+test("a new user starts with an empty savings goals section", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.evaluate(() => localStorage.clear());
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+  await expect(page.getByRole("heading", { name: "اولین هدف پس‌اندازتان را بسازید" })).toBeVisible();
+  await expect(page.locator(".goal-card")).toHaveCount(0);
+
+  const state = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("dara.v2.preview") ?? "null"),
+  );
+  expect(state.goals).toEqual([]);
+});

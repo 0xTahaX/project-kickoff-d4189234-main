@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #f6f7f5;
   --cd: #fff;
   --tx: #1b2420;
@@ -297,7 +297,7 @@ dialog {
   }
 }
 
-/* لینک حساب کاربری در نوار کناری */
+/* ظ„غŒظ†ع© ط­ط³ط§ط¨ ع©ط§ط±ط¨ط±غŒ ط¯ط± ظ†ظˆط§ط± ع©ظ†ط§ط±غŒ */
 nav a {
   display: block;
   padding: 8px 12px;
@@ -572,7 +572,7 @@ nav a {
   margin-inline-start: 8px;
 }
 
-/* ورود و ثبت‌نام با نام کاربری */
+/* ظˆط±ظˆط¯ ظˆ ط«ط¨طھâ€Œظ†ط§ظ… ط¨ط§ ظ†ط§ظ… ع©ط§ط±ط¨ط±غŒ */
 .auth-page {
   max-width: 520px;
   margin-inline: auto;
@@ -602,4 +602,188 @@ nav a {
 }
 .auth-panel .card > p:last-child {
   margin-bottom: 0;
+}
+
+/* ط§ظ‡ط¯ط§ظپ ظ¾ط³â€Œط§ظ†ط¯ط§ط² */
+.goal-help {
+  margin: 0 0 12px;
+}
+.goal-help summary {
+  cursor: pointer;
+  color: var(--g);
+}
+.goal-help p {
+  margin: 6px 0 0;
+  color: var(--mu);
+}
+.goal-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.goal-card .goal-amounts {
+  margin: 6px 0;
+}
+.goal-history-title {
+  margin: 12px 0 6px;
+  font-size: 14px;
+}
+.contrib-list {
+  margin-top: 4px;
+}
+.contrib-row {
+  align-items: flex-start;
+}
+.contrib-row > small {
+  white-space: nowrap;
+}
+.money-words {
+  display: block;
+  color: var(--mu);
+  font-size: 12px;
+  min-height: 1.4em;
+  margin: -4px 0 6px;
+}
+.date-picker {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 6px 0;
+}
+.goal-date {
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.goal-date legend {
+  padding: 0 4px;
+  color: var(--mu);
+  font-size: 12px;
+}
+.goal-empty p {
+  margin: 6px 0;
+}
+@media (max-width: 760px) {
+  .date-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+.goal-add {
+  display: block;
+  margin: 10px 0 4px;
+}
+
+/* وضعیت و تخمین اهداف */
+.goal-card .bar {
+  height: 12px;
+}
+.goal-percent {
+  font-size: 16px;
+  font-weight: 700;
+}
+.goal-expected {
+  display: block;
+  color: var(--mu);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.goal-estimate {
+  display: block;
+  margin-top: 8px;
+  color: var(--mu);
+  font-size: 12px;
+}
+.goal-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.goal-status-completed,
+.goal-status-ahead {
+  background: var(--gs);
+  color: var(--g);
+}
+.goal-status-on_track {
+  background: var(--bg);
+  color: var(--tx);
+  border: 1px solid var(--bd);
+}
+.goal-status-behind {
+  background: var(--rs);
+  color: var(--r);
+}
+.goal-status-unknown {
+  background: var(--ws);
+  color: var(--w);
+}
+
+/* اولویت اهداف پس‌انداز */
+:root {
+  --priority-1-bg: #e8f0fe;
+  --priority-1: #1a56c4;
+  --priority-2-bg: #fdf3dc;
+  --priority-2: #8a6100;
+  --priority-3-bg: #fdebd8;
+  --priority-3: #a94f00;
+  --priority-4-bg: #fbe9e7;
+  --priority-4: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --priority-1-bg: #16243a;
+    --priority-1: #8ab4f8;
+    --priority-2-bg: #3a2e14;
+    --priority-2: #e3b04f;
+    --priority-3-bg: #3a2410;
+    --priority-3: #f0a35e;
+    --priority-4-bg: #3a1f1c;
+    --priority-4: #ee7b70;
+  }
+}
+:root[data-theme="dark"] {
+  --priority-1-bg: #16243a;
+  --priority-1: #8ab4f8;
+  --priority-2-bg: #3a2e14;
+  --priority-2: #e3b04f;
+  --priority-3-bg: #3a2410;
+  --priority-3: #f0a35e;
+  --priority-4-bg: #3a1f1c;
+  --priority-4: #ee7b70;
+}
+.goal-priority {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 12px;
+}
+.goal-priority-1 {
+  background: var(--priority-1-bg);
+  color: var(--priority-1);
+}
+.goal-priority-2 {
+  background: var(--priority-2-bg);
+  color: var(--priority-2);
+}
+.goal-priority-3 {
+  background: var(--priority-3-bg);
+  color: var(--priority-3);
+}
+.goal-priority-4 {
+  background: var(--priority-4-bg);
+  color: var(--priority-4);
+}
+
+/* افزودن دسته‌بندی جدید در فرم تراکنش */
+[data-category-wrap] > button {
+  margin-bottom: 8px;
+}
+[data-new-category-box] {
+  border: 1px dashed var(--bd);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 6px 0 10px;
 }

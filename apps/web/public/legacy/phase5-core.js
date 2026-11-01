@@ -321,18 +321,33 @@
     }
     if (prefs.notifications.goalMilestone) {
       for (const goal of state.goals) {
-        if (goal.target <= 0) continue;
-        const percent = Math.min(100, (goal.saved / goal.target) * 100);
+        if (!(goal.target > 0)) continue;
+        // موجودی هدف از مشارکت‌ها مشتق می‌شود؛ fallback برای دادهٔ قدیمی که هنوز مهاجرت نشده است.
+        const saved = Array.isArray(goal.contributions)
+          ? goal.contributions.reduce(
+              (total, contribution) =>
+                contribution &&
+                !contribution.invalid &&
+                Number.isSafeInteger(contribution.amount) &&
+                contribution.amount > 0
+                  ? total + contribution.amount
+                  : total,
+              0,
+            )
+          : Number.isFinite(goal.saved) && goal.saved > 0
+            ? goal.saved
+            : 0;
+        const percent = Math.min(100, (saved / goal.target) * 100);
         const milestone = [25, 50, 75, 100].filter((value) => percent >= value).pop();
         if (milestone) {
           events.push({
             id: `goal-milestone:${goal.id}:${milestone}`,
             type: "goal_milestone",
             title: `هدف پس‌انداز به ${milestone}٪ رسید`,
-            detail: "این یادآور بر اساس مبلغ ذخیره‌شدهٔ واردشده محاسبه شده است.",
+            detail: "این یادآور بر اساس مبلغ پس‌اندازشدهٔ ثبت‌شده محاسبه شده است.",
             goalId: goal.id,
             milestone,
-            amount: goal.saved,
+            amount: saved,
             createdAt: now.toISOString(),
           });
         }
