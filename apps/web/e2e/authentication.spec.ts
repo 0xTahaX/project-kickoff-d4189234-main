@@ -472,14 +472,16 @@ test("transaction form filters categories by type, accepts a custom category and
 
   const dialog = page.getByRole("dialog");
   const category = dialog.getByLabel("دسته‌بندی");
-  // هزینه: فقط دسته‌های هزینه
+  // هزینه: فقط دسته‌های هزینه و بدون فیلد حساب مقصد
   await expect(category.locator("option", { hasText: "خوراک" })).toHaveCount(1);
   await expect(category.locator("option", { hasText: "حقوق" })).toHaveCount(0);
+  await expect(dialog.locator("[data-target-wrap]")).toBeHidden();
 
   // درآمد: فقط دسته‌های درآمد
   await dialog.getByLabel("نوع").selectOption("income");
   await expect(category.locator("option", { hasText: "حقوق" })).toHaveCount(1);
   await expect(category.locator("option", { hasText: "خوراک" })).toHaveCount(0);
+  await expect(dialog.locator("[data-target-wrap]")).toBeHidden();
 
   // انتقال: بدون دسته‌بندی و با حساب مقصد
   await dialog.getByLabel("نوع").selectOption("transfer");

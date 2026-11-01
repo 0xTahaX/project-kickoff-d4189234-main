@@ -787,3 +787,8 @@ nav a {
   padding: 8px 10px;
   margin: 6px 0 10px;
 }
+
+/* attribute hidden باید بر display:block برچسب‌ها اولویت داشته باشد */
+[hidden] {
+  display: none !important;
+}
