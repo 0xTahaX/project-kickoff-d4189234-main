@@ -244,18 +244,20 @@ test("guest users can register a public wallet and journal a partially closed tr
 
   await page.getByRole("button", { name: "ژورنال معاملات" }).click();
   await page.getByRole("button", { name: "+ ثبت معامله" }).click();
-  await page.getByLabel("حساب / کارگزار").fill("کارگزار آزمایشی");
-  await page.getByLabel("نماد / جفت‌ارز").fill("ETHUSD");
-  await page.getByLabel("ارز مظنه").fill("USD");
-  await page.getByLabel("قیمت ورود").fill("100");
-  await page.getByLabel("حجم / تعداد قرارداد").fill("1");
-  await page.getByRole("button", { name: "ذخیره" }).click();
+  const tradeDialog = page.getByRole("dialog");
+  await tradeDialog.getByLabel("حساب / کارگزار").fill("کارگزار آزمایشی");
+  await tradeDialog.getByLabel("نماد / جفت‌ارز").fill("ETHUSD");
+  await tradeDialog.getByLabel("ارز مظنه").fill("USD");
+  await tradeDialog.getByLabel("قیمت ورود").fill("100");
+  await tradeDialog.getByLabel("حجم / تعداد قرارداد").fill("1");
+  await tradeDialog.getByRole("button", { name: "ذخیره" }).click();
   await expect(page.getByText("ETHUSD", { exact: false }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "ثبت خروج جزئی" }).click();
-  await page.getByLabel(/حجم بسته‌شده/).fill("0.4");
-  await page.getByLabel("قیمت خروج").fill("110");
-  await page.getByRole("button", { name: "ذخیره" }).click();
+  const exitDialog = page.getByRole("dialog");
+  await exitDialog.getByLabel(/حجم بسته‌شده/).fill("0.4");
+  await exitDialog.getByLabel("قیمت خروج").fill("110");
+  await exitDialog.getByRole("button", { name: "ذخیره" }).click();
   const tradeRow = page.getByRole("row").filter({ hasText: "ETHUSD" });
   await expect(tradeRow).toContainText("بخشی بسته");
   await expect(tradeRow).toContainText("۰٫۶ / ۱");
@@ -449,7 +451,7 @@ test("legacy saved goals migrate to contributions without data loss", async ({ p
   await expect(dashboardGoals).toContainText("۲٬۰۰۰٬۰۰۰ تومان");
 
   await page.getByRole("button", { name: "اهداف" }).click();
-  await expect(page.getByRole("heading", { name: "هدف قدیمی" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /هدف قدیمی/ })).toBeVisible();
   await expect(page.locator(".goal-card")).toContainText("۲٬۰۰۰٬۰۰۰ تومان");
   await expect(page.locator(".goal-card")).toContainText("وضعیت نامشخص");
   await expect(page.locator(".goal-card")).toContainText("اطلاعات کافی از پس‌اندازهای اخیر وجود ندارد");
@@ -502,7 +504,7 @@ test("transaction form filters categories by type, accepts a custom category and
   const newName = box.getByLabel("نام دسته‌بندی جدید");
   await newName.fill("  هدیه  ");
   await box.getByRole("button", { name: "افزودن", exact: true }).click();
-  await expect(category.locator("option:checked")).toHaveText("هدیه");
+  await expect(category.locator("option:checked")).toHaveText(/هدیه/);
 
   // تکرار همان نام در همان نوع رد می‌شود
   await dialog.getByRole("button", { name: "+ افزودن دسته‌بندی جدید" }).click();
@@ -573,4 +575,201 @@ test("a new user starts with an empty savings goals section", async ({ page }) =
     JSON.parse(localStorage.getItem("dara.v2.preview") ?? "null"),
   );
   expect(state.goals).toEqual([]);
+});
+
+test("goals support description, start date, emoji and a savings plan", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.evaluate(() => localStorage.clear());
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+
+  await page.getByRole("button", { name: "+ هدف جدید" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("نام هدف").fill("خرید لپ‌تاپ");
+  await dialog.getByLabel("توضیحات (اختیاری)").fill("برای کار و دانشگاه");
+  await dialog.getByLabel("مبلغ هدف").fill("60000000");
+  await dialog.getByRole("button", { name: /انتخاب ایموجی/ }).click();
+  await dialog.locator("[data-emoji-tab='tech']").click();
+  await dialog.locator("[data-emoji='💻']").click();
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+
+  const card = page.locator(".goal-card");
+  await expect(card).toContainText("💻 خرید لپ‌تاپ");
+  await expect(card).toContainText("برای کار و دانشگاه");
+  await expect(card).toContainText("شروع");
+
+  await card.getByRole("button", { name: "تنظیم برنامهٔ پس‌انداز" }).click();
+  const planDialog = page.getByRole("dialog");
+  await planDialog.getByLabel(/^مبلغ هر دوره/).fill("500000");
+  await planDialog.locator('[name="period"]').selectOption("daily");
+  await planDialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(card).toContainText("برنامهٔ روزانه");
+
+  await card.getByRole("button", { name: "ثبت پرداخت" }).first().click();
+  const payDialog = page.getByRole("dialog");
+  await payDialog.getByLabel(/^مبلغ واقعی/).fill("300000");
+  await payDialog.getByRole("button", { name: "ثبت پس‌انداز" }).click();
+  await expect(card).toContainText("انجام‌شده ۱");
+  await expect(page.getByText("پس‌انداز این دوره ثبت شد. آفرین!")).toBeVisible();
+
+  await card.getByRole("button", { name: "توقف موقت" }).click();
+  await expect(card).toContainText("وضعیت متوقف");
+
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+  await expect(page.locator(".goal-card")).toContainText("وضعیت متوقف");
+  await expect(page.locator(".goal-card")).toContainText("💻");
+});
+
+test("overdue periods are flagged as late while future periods stay pending", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.addInitScript(() => {
+    const start = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10);
+    localStorage.setItem(
+      "dara.v2.preview",
+      JSON.stringify({
+        v: 3,
+        cur: "تومان",
+        accounts: [{ id: "a1", name: "نقد", type: "cash", opening: 0 }],
+        cats: [],
+        tx: [],
+        budgets: {},
+        rec: [],
+        goals: [
+          {
+            id: "late-goal",
+            name: "خرید خودرو",
+            description: "",
+            emoji: "🚗",
+            target: 10_000_000,
+            date: "",
+            start_date: start,
+            priority: 3,
+            created_at: start,
+            contributions: [],
+            plan: {
+              id: "plan-late",
+              amount: 500_000,
+              period: "daily",
+              start_date: start,
+              status: "active",
+              created_at: start,
+            },
+            installments: [],
+          },
+        ],
+      }),
+    );
+  });
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "اهداف" }).click();
+  const card = page.locator(".goal-card");
+  await expect(card).toContainText("معوق");
+  await expect(card.locator(".inst-late").first()).toBeVisible();
+  await expect(card.locator(".inst-pending")).toHaveCount(1);
+
+  // ثبت یکی از دوره‌های تأخیردار
+  await card.getByRole("button", { name: "ثبت پرداخت" }).first().click();
+  const payDialog = page.getByRole("dialog");
+  await payDialog.getByLabel(/^مبلغ واقعی/).fill("500000");
+  await payDialog.getByRole("button", { name: "ثبت پس‌انداز" }).click();
+  await expect(card.locator(".inst-done")).toHaveCount(1);
+});
+
+test("trading journal: account, deposit, trade and partial exits update the balance", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.evaluate(() => localStorage.clear());
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "ژورنال معاملات" }).click();
+
+  await page.getByRole("button", { name: "+ حساب معاملاتی جدید" }).click();
+  let dialog = page.getByRole("dialog");
+  await dialog.getByLabel("نام حساب").fill("Bitunix");
+  await dialog.getByLabel("کارگزار / صرافی").fill("Bitunix");
+  await dialog.getByLabel("ارز حساب (مثلاً USD یا IRT)").fill("USD");
+  await dialog.getByLabel("موجودی اولیه").fill("10000");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+
+  await page.getByRole("button", { name: "واریز" }).first().click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel(/^مبلغ/).fill("2000");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  const accountCard = page.locator("section.card").filter({ hasText: "حساب‌های معاملاتی" });
+  await expect(accountCard).toContainText("12000");
+
+  await page.getByRole("button", { name: "+ ثبت معامله" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel("نماد / جفت‌ارز").fill("BTC");
+  await dialog.getByLabel("ارز مظنه").fill("USD");
+  await dialog.getByLabel("قیمت ورود").fill("100");
+  await dialog.getByLabel("حجم / تعداد قرارداد").fill("2");
+  await dialog.getByLabel("نرخ کارمزد ورود (٪، جایگزین مبلغ)").fill("0.06");
+  await dialog.getByLabel("حد ضرر (اختیاری)").fill("95");
+  await dialog.getByLabel("حد سود (اختیاری)").fill("110");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(page.locator("table.phase4-table:not(.mm-table) tbody tr")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "ثبت خروج جزئی" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel(/^حجم بسته‌شده/).fill("1");
+  await dialog.getByLabel("قیمت خروج").fill("110");
+  await dialog.getByLabel("نرخ کارمزد خروج (٪، جایگزین مبلغ)").fill("0.06");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  // نیمهٔ بسته‌شده: سود ۱۰ − کارمزد ۰٫۱۲۶ = ۹٫۸۷۴
+  await expect(accountCard).toContainText("12009.874");
+
+  await page.getByRole("button", { name: "ثبت خروج جزئی" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByLabel(/^حجم بسته‌شده/).fill("1");
+  await dialog.getByLabel("قیمت خروج").fill("110");
+  await dialog.getByLabel("نرخ کارمزد خروج (٪، جایگزین مبلغ)").fill("0.06");
+  await dialog.getByRole("button", { name: "ذخیره" }).click();
+  await expect(accountCard).toContainText("12019.748");
+  await expect(page.locator("table.phase4-table:not(.mm-table) tbody tr")).toContainText("بسته");
+});
+
+test("money management calculator computes risk, staged targets and transfers to the trade form", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.goto("/legacy/index.html?preview=1");
+  await page.evaluate(() => localStorage.clear());
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "ژورنال معاملات" }).click();
+
+  const mm = page.locator("details.mm");
+  await mm.getByLabel("موجودی حساب").fill("1000");
+  await mm.getByLabel("ریسک هر معامله (٪)").fill("1");
+  await mm.getByLabel("قیمت ورود").fill("100");
+  await mm.getByLabel("حد ضرر").fill("98");
+  await mm.getByLabel("کارمزد ورود (٪)").fill("0");
+  await mm.getByLabel("کارمزد خروج (٪)").fill("0");
+  await mm.getByLabel("قیمت تارگت 1").fill("104");
+  await mm.getByLabel("درصد خروج تارگت 1").fill("50");
+  await mm.getByLabel("فعال بودن تارگت 2").check();
+  await mm.getByLabel("قیمت تارگت 2").fill("110");
+  await mm.getByLabel("روش تارگت 2").selectOption("rr");
+  await mm.getByLabel("RR تارگت 2").fill("2");
+  await page.waitForTimeout(150);
+
+  const result = page.locator("[data-mm-results]");
+  await expect(result.locator(".kpi").filter({ hasText: "Risk Amount" })).toContainText("10");
+  await expect(result.locator(".kpi").filter({ hasText: "Position Size" })).toContainText("5");
+  await expect(result.locator(".kpi").filter({ hasText: "حداکثر زیان" })).toContainText("10");
+  await expect(page.locator('[data-mm-out="0"]')).toContainText("۵۰");
+  await expect(page.locator('[data-mm-out="1"]')).toContainText("۴۰");
+  await expect(page.locator(".mm-summary")).toContainText("۹۰");
+  await expect(page.locator(".mm-summary")).toContainText("معتبر");
+
+  await page.getByRole("button", { name: "انتقال ورودی‌ها به فرم ثبت معامله" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByLabel("قیمت ورود")).toHaveValue("100");
+  await expect(dialog.getByLabel("حجم / تعداد قرارداد")).toHaveValue("5");
+  await expect(dialog.getByLabel("حد ضرر (اختیاری)")).toHaveValue("98");
+  await dialog.getByRole("button", { name: "انصراف" }).click();
+
+  await mm.getByLabel("حد ضرر").fill("100");
+  await expect(result).toContainText("حد ضرر نباید برابر");
+  await mm.getByLabel("حد ضرر").fill("98");
+  await expect(page.locator(".mm-summary")).toContainText("معتبر");
 });

@@ -792,3 +792,230 @@ nav a {
 [hidden] {
   display: none !important;
 }
+
+/* ─── ایموجی، برنامهٔ پس‌انداز و اهداف ─── */
+.goal-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 4px 0 10px;
+  color: var(--mu);
+  font-size: 13px;
+}
+.goal-stats span {
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  padding: 3px 10px;
+}
+.goal-desc {
+  margin: 2px 0 8px;
+  color: var(--mu);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.goal-status-not_started {
+  background: var(--priority-1-bg, var(--bg));
+  color: var(--priority-1, var(--mu));
+  border: 1px solid var(--bd);
+}
+.goal-plan {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--bd);
+}
+.goal-plan-line {
+  margin: 4px 0;
+  font-size: 13px;
+}
+.goal-plan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.goal-alert {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--priority-3-bg, var(--bg));
+  color: var(--priority-3, var(--tx));
+  font-size: 13px;
+}
+.installments {
+  margin: 6px 0;
+}
+.installment-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.installment-row b {
+  min-width: 110px;
+}
+.inst-status {
+  border-radius: 9px;
+  padding: 1px 8px;
+  font-size: 12px;
+}
+.inst-done {
+  background: var(--gs);
+  color: var(--g);
+}
+.inst-late {
+  background: var(--rs);
+  color: var(--r);
+}
+.inst-pending {
+  background: var(--bg);
+  color: var(--tx);
+  border: 1px solid var(--bd);
+}
+.inst-paused,
+.inst-cancelled {
+  background: var(--ws);
+  color: var(--w);
+}
+.flash {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--gs);
+  color: var(--g);
+  font-size: 13px;
+}
+.emoji-picker {
+  margin: 4px 0 10px;
+}
+.emoji-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.emoji-trigger {
+  font-size: 15px;
+}
+.emoji-panel {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--card);
+}
+.emoji-panel input[type="search"] {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.emoji-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.emoji-tabs .b {
+  font-size: 12px;
+  padding: 2px 8px;
+}
+.emoji-tabs .b.on {
+  background: var(--gs);
+  color: var(--g);
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 4px;
+  max-height: 190px;
+  overflow: auto;
+}
+.emoji-item {
+  font-size: 20px;
+  line-height: 1;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+.emoji-item:hover,
+.emoji-item:focus {
+  border-color: var(--bd);
+  background: var(--bg);
+}
+.emoji-field-label {
+  font-size: 13px;
+  color: var(--mu);
+  margin-top: 6px;
+}
+@media (max-width: 600px) {
+  .goal-plan-actions .b,
+  .installment-row .b {
+    font-size: 12px;
+  }
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--tx);
+  font: inherit;
+  resize: vertical;
+}
+
+/* ماشین‌حساب مدیریت سرمایه */
+.mm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.mm-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.mm-summary {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.mm-table input {
+  width: 100%;
+  min-width: 70px;
+}
+.mm-table td {
+  font-size: 12px;
+}
+.mm-error {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--rs);
+  color: var(--r);
+  font-size: 13px;
+}
+.mm-warning {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--priority-3-bg, var(--bg));
+  color: var(--priority-3, var(--tx));
+  font-size: 13px;
+}
+
+.mm-table td:last-child {
+  min-width: 170px;
+  white-space: normal;
+  line-height: 1.6;
+}

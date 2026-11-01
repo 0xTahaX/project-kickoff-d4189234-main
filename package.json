@@ -18,7 +18,7 @@
     "start": "npm run start --workspace=apps/api",
     "test": "npm run test --workspaces --if-present && npm run test:legacy",
     "test:e2e": "npm run test:e2e --workspace=apps/web",
-    "test:legacy": "node --test validators.test.js server.test.js assets-core.test.js apps/web/public/legacy/phase4-core.test.js apps/web/public/legacy/phase5-core.test.js apps/web/public/legacy/money-core.test.js apps/web/public/legacy/goals-core.test.js apps/web/public/legacy/categories-core.test.js",
+    "test:legacy": "node --test validators.test.js server.test.js assets-core.test.js apps/web/public/legacy/phase4-core.test.js apps/web/public/legacy/phase5-core.test.js apps/web/public/legacy/money-core.test.js apps/web/public/legacy/goals-core.test.js apps/web/public/legacy/categories-core.test.js apps/web/public/legacy/emoji-core.test.js",
     "security:smoke": "node scripts/security-smoke.mjs",
     "typecheck": "npm run db:generate && npm run typecheck --workspaces --if-present",
     "db:generate": "npm run db:generate --workspace=apps/api",

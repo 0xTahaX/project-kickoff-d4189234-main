@@ -35,7 +35,7 @@
     commodities: "کالا",
     other: "سایر",
   };
-  const FILTERS = { market: "", status: "", strategy: "", currency: "", from: "", to: "" };
+  const FILTERS = { account: "", market: "", status: "", strategy: "", currency: "", from: "", to: "" };
   const syncErrors = new Map();
   let state;
   let stateError = "";
@@ -175,7 +175,7 @@
   }
 
   const tradeFields = [
-    { name: "account", label: "حساب / کارگزار", required: true },
+    { name: "account", label: "حساب / کارگزار (متن اختیاری)" },
     {
       name: "market",
       label: "بازار",
@@ -203,6 +203,7 @@
     { name: "stopLoss", label: "حد ضرر (اختیاری)", step: "0.00000001" },
     { name: "takeProfit", label: "حد سود (اختیاری)", step: "0.00000001" },
     { name: "entryFee", label: "کارمزد ورود (خالی = صفر)", step: "0.00000001" },
+    { name: "entryFeeRate", label: "نرخ کارمزد ورود (٪، جایگزین مبلغ)", step: "0.00000001" },
     { name: "strategy", label: "استراتژی" },
     { name: "tags", label: "برچسب‌ها (با ویرگول جدا شود)" },
     { name: "entryRationale", label: "دلیل ورود", type: "textarea" },
@@ -216,18 +217,30 @@
     { name: "notes", label: "یادداشت", type: "textarea" },
   ];
 
-  function tradeDialog(trade = null) {
+  function tradeDialog(trade = null, template = null) {
     const entry = trade
       ? { ...trade, entryDate: localDateTime(trade.entryDate) }
       : {
           market: "crypto",
-          instrument: "spot",
-          direction: "long",
-          currency: window.DARA_APP_STATE?.cur === "تومان" ? "IRT" : window.DARA_APP_STATE?.cur || "USD",
-          entryDate: localDateTime(),
+          instrument: template?.instrument === "linear" ? "derivative" : "spot",
+          direction: template?.side || "long",
+          currency:
+            template?.currency ||
+            (window.DARA_APP_STATE?.cur === "تومان" ? "IRT" : window.DARA_APP_STATE?.cur || "USD"),
+          entryDate: localDateTime(template?.entryDate || new Date()),
           entryFee: "0",
+          accountId: template?.accountId || (state.accounts[0] ? state.accounts[0].id : ""),
+          ...(template || {}),
         };
-    openForm(trade ? "ویرایش معامله" : "ثبت معامله", tradeFields, entry, (data) => {
+    const fields = [...tradeFields];
+    if (state.accounts.length)
+      fields.push({
+        name: "accountId",
+        label: "حساب معاملاتی",
+        type: "select",
+        options: [["", "بدون حساب"], ...state.accounts.map((account) => [account.id, `${account.name} (${account.currency})`])],
+      });
+    openForm(trade ? "ویرایش معامله" : "ثبت معامله", fields, entry, (data) => {
       const normalized = { ...data, entryDate: new Date(data.entryDate).toISOString() };
       if (trade) Core.editTrade(state, trade.id, normalized);
       else Core.createTrade(state, normalized);
@@ -242,6 +255,7 @@
         { name: "exitPrice", label: "قیمت خروج", required: true, step: "0.00000001" },
         { name: "closedAt", label: "تاریخ و ساعت خروج", type: "datetime-local", required: true, value: localDateTime() },
         { name: "exitFee", label: "کارمزد خروج (خالی = صفر)", step: "0.00000001" },
+        { name: "exitFeeRate", label: "نرخ کارمزد خروج (٪، جایگزین مبلغ)", step: "0.00000001" },
         { name: "fundingCost", label: "هزینهٔ تأمین مالی همین بخش (خالی = صفر)", step: "0.00000001" },
         { name: "rationale", label: "دلیل خروج", type: "textarea" },
       ],
@@ -269,6 +283,43 @@
     );
   }
 
+
+  function accountDialog() {
+    const currency = window.DARA_APP_STATE?.cur === "تومان" ? "IRT" : window.DARA_APP_STATE?.cur || "USD";
+    openForm(
+      "حساب معاملاتی جدید",
+      [
+        { name: "name", label: "نام حساب", required: true },
+        { name: "broker", label: "کارگزار / صرافی" },
+        { name: "currency", label: "ارز حساب (مثلاً USD یا IRT)", required: true },
+        { name: "initialBalance", label: "موجودی اولیه", required: true, step: "0.00000001" },
+      ],
+      { currency, initialBalance: "0" },
+      (data) => Core.createAccount(state, data),
+    );
+  }
+
+  function accountEventDialog(accountId, type) {
+    const account = state.accounts.find((entry) => entry.id === accountId);
+    if (!account) return;
+    openForm(
+      `${type === "deposit" ? "واریز سرمایه" : "برداشت سرمایه"} · ${account.name}`,
+      [
+        { name: "amount", label: `مبلغ (${account.currency})`, required: true, step: "0.00000001" },
+        { name: "at", label: "تاریخ و ساعت", type: "datetime-local", required: true },
+        { name: "note", label: "یادداشت (اختیاری)" },
+      ],
+      { at: localDateTime() },
+      (data) =>
+        Core.recordAccountEvent(state, {
+          accountId,
+          type,
+          amount: data.amount,
+          at: new Date(data.at).toISOString(),
+          note: data.note,
+        }),
+    );
+  }
   function addWallet() {
     openForm(
       "افزودن کیف پول عمومی",
@@ -324,11 +375,172 @@
     }
   }
 
+
+  // ─── ماشین‌حساب مدیریت سرمایه و خروج پله‌ای (فاز ۲) ────────────────────────
+  const mmTarget = () => ({ enabled: false, price: "", mode: "percent", basis: "initial", rr: "", percent: "" });
+  const MM = {
+    accountId: "",
+    balance: "",
+    riskPercent: "1",
+    side: "long",
+    instrument: "spot",
+    symbol: "",
+    entry: "",
+    stop: "",
+    leverage: "1",
+    entryFeeRate: "0.06",
+    exitFeeRate: "0.06",
+    maintenanceMarginRate: "",
+    targets: [{ ...mmTarget(), enabled: true }, mmTarget(), mmTarget(), mmTarget(), mmTarget()],
+  };
+
+  const mmInput = (name, label, attrs = "") =>
+    `<label>${escape(label)}<input inputmode="decimal" data-mm="${escape(name)}" value="${escape(MM[name])}" ${attrs}></label>`;
+
+  function renderMoneyManagement() {
+    const accountOptions = [
+      ["", "ورودی دستی"],
+      ...state.accounts.map((account) => [account.id, `${account.name} (${account.currency})`]),
+    ];
+    const rows = MM.targets
+      .map(
+        (target, index) => `<tr data-mm-target="${index}">
+          <td><input type="checkbox" data-mm-t="${index}" data-mm-field="enabled"${target.enabled ? " checked" : ""} aria-label="فعال بودن تارگت ${index + 1}"></td>
+          <td>T${index + 1}</td>
+          <td><input inputmode="decimal" data-mm-t="${index}" data-mm-field="price" value="${escape(target.price)}" aria-label="قیمت تارگت ${index + 1}"></td>
+          <td><select data-mm-t="${index}" data-mm-field="mode" aria-label="روش تارگت ${index + 1}"><option value="percent"${target.mode === "percent" ? " selected" : ""}>درصد حجم</option><option value="rr"${target.mode === "rr" ? " selected" : ""}>RR هدف</option></select></td>
+          <td><select data-mm-t="${index}" data-mm-field="basis" aria-label="مبنای تارگت ${index + 1}"><option value="initial"${target.basis === "initial" ? " selected" : ""}>از حجم اولیه</option><option value="remaining"${target.basis === "remaining" ? " selected" : ""}>از حجم باقی‌مانده</option></select></td>
+          <td><input inputmode="decimal" data-mm-t="${index}" data-mm-field="rr" value="${escape(target.rr)}" aria-label="RR تارگت ${index + 1}"></td>
+          <td><input inputmode="decimal" data-mm-t="${index}" data-mm-field="percent" value="${escape(target.percent)}" aria-label="درصد خروج تارگت ${index + 1}"></td>
+          <td data-mm-out="${index}">—</td>
+        </tr>`,
+      )
+      .join("");
+    return `<details class="card mm" open><summary>ماشین‌حساب مدیریت سرمایه و خروج پله‌ای</summary>
+      <p class="mu">ابزار مستقل و فقط‌محاسباتی؛ هیچ معامله‌ای ثبت نمی‌کند. مدل پشتیبانی‌شده: Spot و Linear Perpetual با مارجین ایزوله. Inverse، Funding، Slippage و محدودیت Tick/Lot خارج از محدوده‌اند.</p>
+      <div class="mm-grid">
+        <label>حساب معاملاتی<select data-mm-account>${accountOptions.map(([value, label]) => `<option value="${escape(value)}"${MM.accountId === value ? " selected" : ""}>${escape(label)}</option>`).join("")}</select></label>
+        ${mmInput("balance", "موجودی حساب")}
+        ${mmInput("riskPercent", "ریسک هر معامله (٪)")}
+        <label>جهت معامله<select data-mm="side"><option value="long"${MM.side === "long" ? " selected" : ""}>Long</option><option value="short"${MM.side === "short" ? " selected" : ""}>Short</option></select></label>
+        <label>نوع قرارداد<select data-mm="instrument"><option value="spot"${MM.instrument === "spot" ? " selected" : ""}>Spot</option><option value="linear"${MM.instrument === "linear" ? " selected" : ""}>Linear Perpetual</option></select></label>
+        ${mmInput("symbol", "نماد", 'placeholder="BTCUSDT"')}
+        ${mmInput("entry", "قیمت ورود")}
+        ${mmInput("stop", "حد ضرر")}
+        ${mmInput("leverage", "اهرم")}
+        ${mmInput("entryFeeRate", "کارمزد ورود (٪)")}
+        ${mmInput("exitFeeRate", "کارمزد خروج (٪)")}
+        ${mmInput("maintenanceMarginRate", "مارجین نگهداری (٪، اختیاری)")}
+      </div>
+      <div class="mm-results" data-mm-results></div>
+      <div class="asset-table-wrap"><table class="phase4-table mm-table"><thead><tr><th>فعال</th><th>#</th><th>قیمت</th><th>روش</th><th>مبنا</th><th>RR هدف</th><th>درصد خروج</th><th>نتیجه</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div data-mm-warnings></div>
+      <button class="b" type="button" data-mm-to-trade>انتقال ورودی‌ها به فرم ثبت معامله</button>
+    </details>`;
+  }
+
+  function renderMMResults() {
+    const box = document.querySelector("[data-mm-results]");
+    if (!box) return;
+    const out = Core.moneyManagement({ ...MM, targets: MM.targets });
+    if (!out.ok) {
+      box.innerHTML = `<div class="mm-error">${out.errors.map((message) => `<div>${escape(message)}</div>`).join("")}</div>`;
+    } else {
+      const cards = [
+        ["Risk Amount", out.riskAmount],
+        ["Stop Distance", `${out.stopDistance} (${format(out.stopPercent, 2)}٪)`],
+        ["Position Size", out.quantity],
+        ["Position Value", out.positionValue],
+        ["Required Margin", out.requiredMargin],
+        ["حداکثر زیان", out.maxLoss],
+        ["اهرم", out.leverage],
+        ["لیکوییدیشن", out.liquidation ? `${out.liquidation.price} (تقریبی)` : "قابل محاسبهٔ دقیق نیست"],
+      ];
+      box.innerHTML =
+        cards
+          .map(
+            ([label, value]) =>
+              `<div class="card kpi"><small>${escape(label)}</small><b>${escape(value)}</b></div>`,
+          )
+          .join("") +
+        `<div class="mm-summary">مجموع خروج: <b>${format(out.summary.closedPercent, 2)}٪</b> · باقی‌مانده: <b>${format(out.summary.remainingPercent, 2)}٪</b> · سود تخمینی خروج‌های معتبر: <b>${escape(out.summary.estimatedProfit)}</b> · وضعیت: <b>${out.summary.validPlan ? "معتبر" : "نامعتبر"}</b></div>`;
+    }
+    MM.targets.forEach((target, index) => {
+      const cell = document.querySelector(`[data-mm-out="${index}"]`);
+      if (!cell) return;
+      const item = out.targets ? out.targets[index] : null;
+      if (!item || !item.enabled) {
+        cell.textContent = "غیرفعال";
+      } else if (!item.valid) {
+        cell.textContent = item.reason || "نامعتبر";
+      } else {
+        cell.textContent = `RR ${format(item.actualRR, 2)} · ${format(item.closePercent, 2)}٪ · ${format(item.closeQty, 8)} واحد · سود ${format(item.estimatedProfit, 8)}`;
+      }
+    });
+    const warnings = document.querySelector("[data-mm-warnings]");
+    if (warnings)
+      warnings.innerHTML = out.ok
+        ? out.warnings.map((message) => `<p class="mm-warning">${escape(message)}</p>`).join("")
+        : "";
+  }
+
+  function syncMM(target) {
+    if (target.matches("[data-mm-account]")) {
+      MM.accountId = target.value;
+      const account = state.accounts.find((entry) => entry.id === MM.accountId);
+      if (account) {
+        MM.balance = Core.accountBalance(state, account.id).current;
+        const balanceInput = document.querySelector('[data-mm="balance"]');
+        if (balanceInput) balanceInput.value = MM.balance;
+      }
+      renderMMResults();
+      return;
+    }
+    if (target.matches("[data-mm]")) {
+      MM[target.dataset.mm] = target.value;
+      renderMMResults();
+      return;
+    }
+    if (target.matches("[data-mm-t]")) {
+      const index = Number(target.dataset.mmT);
+      const field = target.dataset.mmField;
+      MM.targets[index][field] = field === "enabled" ? target.checked : target.value;
+      renderMMResults();
+    }
+  }
+
+  function mmToTrade() {
+    const out = Core.moneyManagement({ ...MM, targets: MM.targets });
+    if (!out.ok || Number(out.quantity) <= 0) {
+      alert("ابتدا ورودی‌های معتبر را کامل کنید.");
+      return;
+    }
+    const account = state.accounts.find((entry) => entry.id === MM.accountId);
+    const first = out.targets.find((target) => target.valid);
+    tradeDialog(null, {
+      account: account ? account.name : "",
+      accountId: account ? account.id : "",
+      currency: account ? account.currency : "",
+      symbol: MM.symbol,
+      side: MM.side,
+      instrument: MM.instrument,
+      entryPrice: MM.entry,
+      quantity: out.quantity,
+      stopLoss: MM.stop,
+      takeProfit: first ? first.price : "",
+      leverage: MM.instrument === "linear" ? MM.leverage : "",
+      entryFeeRate: MM.entryFeeRate,
+    });
+  }
   function renderTrades() {
     const currencies = [...new Set(state.trades.map((trade) => trade.currency))].sort();
     const strategies = [...new Set(state.trades.map((trade) => trade.strategy).filter(Boolean))].sort();
+    const accounts = state.accounts || [];
+    const selectedAccount = FILTERS.account || (accounts[0] ? accounts[0].id : "");
+    const accountRow = accounts.find((account) => account.id === selectedAccount) || null;
+    const summary = selectedAccount ? Core.journalSummary(state, { accountId: selectedAccount }) : null;
     const selectedCurrency = FILTERS.currency || currencies[0] || "";
-    const filtered = { ...FILTERS, currency: selectedCurrency };
+    const filtered = { ...FILTERS, accountId: selectedAccount, currency: selectedCurrency };
     const report = Core.analytics(state, filtered);
     const displayed = report.trades;
     const cards = [
@@ -346,17 +558,32 @@
       const result = trade.result;
       const rr = Core.riskReward(trade);
       const stale = trade.markAt && Date.now() - Date.parse(trade.markAt) > 24 * 60 * 60 * 1000;
-      const details = `<details class="phase4-details"><summary>جزئیات · ${escape(trade.symbol)}</summary><p>حساب: ${escape(trade.account)} · ابزار: ${trade.instrument === "spot" ? "نقدی" : "مشتقه"} · جهت: ${trade.direction === "long" ? "Long" : "Short"} · اهرم: ${escape(trade.leverage || "—")}</p><p>دلیل ورود: ${escape(trade.entryRationale || "ثبت نشده")} · دلیل خروج: ${escape(trade.exitRationale || "—")}</p><p>یادداشت روان‌شناختی: ${escape(trade.psychologicalNotes || "—")} · رعایت برنامه: ${escape(trade.ruleFollowing)}</p><p>هزینهٔ تأمین مالی خروج‌های ثبت‌شده در خالص P/L همین خروج‌ها منظور می‌شود. حجم ورود، کارمزد ورود و هزینه‌های هر خروج متناسب با حجم تخصیص می‌یابد.</p><ul>${trade.closes.map((close) => `<li class="row">خروج ${escape(dateLabel(close.closedAt))} · ${format(close.quantity)} @ ${format(close.exitPrice)} · خالص ${format(close.netPnl)} ${escape(trade.currency)}</li>`).join("") || '<li class="mu">خروجی ثبت نشده است.</li>'}</ul><p>برچسب‌ها: ${escape(trade.tags.join(", ") || "—")} · یادداشت: ${escape(trade.notes || "—")}</p></details>`;
+      const accountLabel = trade.accountId ? (state.accounts.find((account) => account.id === trade.accountId)?.name || trade.account) : trade.account;
+      const details = `<details class="phase4-details"><summary>جزئیات · ${escape(trade.symbol)}</summary><p>حساب: ${escape(accountLabel)} · ابزار: ${trade.instrument === "spot" ? "نقدی" : "مشتقه"} · جهت: ${trade.direction === "long" ? "Long" : "Short"} · اهرم: ${escape(trade.leverage || "—")}</p><p>دلیل ورود: ${escape(trade.entryRationale || "ثبت نشده")} · دلیل خروج: ${escape(trade.exitRationale || "—")}</p><p>یادداشت روان‌شناختی: ${escape(trade.psychologicalNotes || "—")} · رعایت برنامه: ${escape(trade.ruleFollowing)}</p><p>هزینهٔ تأمین مالی خروج‌های ثبت‌شده در خالص P/L همین خروج‌ها منظور می‌شود. حجم ورود، کارمزد ورود و هزینه‌های هر خروج متناسب با حجم تخصیص می‌یابد.</p><ul>${trade.closes.map((close) => `<li class="row">خروج ${escape(dateLabel(close.closedAt))} · ${format(close.quantity)} @ ${format(close.exitPrice)} · خالص ${format(close.netPnl)} ${escape(trade.currency)}</li>`).join("") || '<li class="mu">خروجی ثبت نشده است.</li>'}</ul><p>برچسب‌ها: ${escape(trade.tags.join(", ") || "—")} · یادداشت: ${escape(trade.notes || "—")}</p></details>`;
       const actions = trade.status === "closed"
         ? ""
         : `<button class="b" data-phase4-action="close-trade" data-id="${escape(trade.id)}">ثبت خروج جزئی</button> <button class="b" data-phase4-action="mark-trade" data-id="${escape(trade.id)}">قیمت دستی</button> <button class="b" data-phase4-action="edit-trade" data-id="${escape(trade.id)}" ${trade.closes.length ? "disabled" : ""}>ویرایش</button>`;
       const unrealized = result.unrealized == null
         ? "بدون قیمت معتبر"
         : `${format(result.unrealized)} ${escape(trade.currency)}${stale ? " · قیمت قدیمی" : ""} · ${escape(trade.markSource || "منبع ثبت نشده")}`;
-      return `<tr><td>${escape(trade.symbol)}<small>${escape(trade.account)} · ${escape(trade.strategy || "بدون استراتژی")}</small>${details}</td><td>${escape(MARKET_LABELS[trade.market])} · ${trade.direction === "long" ? "Long" : "Short"}<small>${escape(dateLabel(trade.entryDate))}</small></td><td>${format(result.remainingQuantity)} / ${format(trade.quantity)}</td><td>${escape(trade.status === "closed" ? "بسته" : trade.status === "partially_closed" ? "بخشی بسته" : "باز")}<small>${format(trade.entryPrice)} ${escape(trade.currency)}</small></td><td>${format(result.netRealized)} ${escape(trade.currency)}<small>بروتو: ${format(result.grossRealized)}</small></td><td>${escape(unrealized)}<small>هدف/ضرر: ${escape(rr || "—")}</small></td><td>${actions}</td></tr>`;
+      return `<tr><td>${escape(trade.symbol)}<small>${escape(accountLabel)} · ${escape(trade.strategy || "بدون استراتژی")}</small>${details}</td><td>${escape(MARKET_LABELS[trade.market])} · ${trade.direction === "long" ? "Long" : "Short"}<small>${escape(dateLabel(trade.entryDate))}</small></td><td>${format(result.remainingQuantity)} / ${format(trade.quantity)}</td><td>${escape(trade.status === "closed" ? "بسته" : trade.status === "partially_closed" ? "بخشی بسته" : "باز")}<small>${format(trade.entryPrice)} ${escape(trade.currency)}</small></td><td>${format(result.netRealized)} ${escape(trade.currency)}<small>بروتو: ${format(result.grossRealized)}</small></td><td>${escape(unrealized)}<small>هدف/ضرر: ${escape(rr || "—")}</small></td><td>${actions}</td></tr>`;
     }).join("");
     const groupPerformance = (heading, groups) =>
       `<section class="card"><h3>${escape(heading)}</h3><ul>${Object.entries(groups).map(([key, value]) => `<li class="row"><span>${escape(key)}</span><b>${escape(value)} ${escape(selectedCurrency)}</b></li>`).join("") || '<li class="mu">معاملهٔ بسته‌شده‌ای نیست.</li>'}</ul></section>`;
+    const accountCards = summary
+      ? [
+          ["موجودی فعلی", `${summary.balance.current} ${accountRow ? accountRow.currency : ""}`],
+          ["سود ناخالص", summary.grossProfit],
+          ["زیان ناخالص", summary.grossLoss],
+          ["کارمزدها", summary.fees],
+          ["سود/زیان خالص", summary.netTotal],
+          ["ریسک معاملات باز", summary.totalRisk],
+        ]
+          .map(([label, value]) => `<div class="card kpi"><small>${escape(label)}</small><b>${escape(value == null ? "—" : value)}</b></div>`)
+          .join("")
+      : "";
+    const mmSection = renderMoneyManagement();
+    const accountsSection = `<section class="card"><h3>حساب‌های معاملاتی و انتقال سرمایه</h3>${accounts.length ? accounts.map((account) => { const balance = Core.accountBalance(state, account.id); return `<div class="row"><div><b>${escape(account.name)}</b><small>${escape(account.broker || "کارگزار نامشخص")} · ${escape(account.currency)} · اولیه ${escape(balance.initial)}</small></div><div><b>${escape(balance.current)} ${escape(account.currency)}</b><small>قابل استفاده ${escape(balance.available)} · مارجین ${escape(balance.usedMargin)}</small></div><span><button class="b" type="button" data-phase4-action="deposit" data-id="${escape(account.id)}">واریز</button> <button class="b" type="button" data-phase4-action="withdraw" data-id="${escape(account.id)}">برداشت</button></span></div>`; }).join("") : `<p class="mu">حساب معاملاتی ثبت نشده است. موجودی حساب فقط از واریز/برداشت و سود و زیان تحقق‌یافتهٔ واقعی محاسبه می‌شود.</p>`}<button class="b" type="button" data-phase4-action="add-account">+ حساب معاملاتی جدید</button><small>واریز و برداشت هرگز سود/زیان معاملاتی نیستند و مارجین رزروشده با زیان تحقق‌یافته اشتباه نمی‌شود.</small></section>`;
     const warnings = [
       report.missingMark ? `${report.missingMark} معاملهٔ باز قیمت مرجع ندارد و در P/L تحقق‌نیافته لحاظ نشده است.` : "",
       report.staleMarks ? `${report.staleMarks} قیمت دستی بیش از ۲۴ ساعت عمر دارد.` : "",
@@ -365,7 +592,8 @@
     const currencyWarning = currencies.length > 1
       ? message(`ارزها با هم جمع نمی‌شوند؛ نتایج فقط برای ${selectedCurrency || "ارز انتخاب‌شده"} هستند.`)
       : "";
-    return `<div class="top"><div><h2 style="margin:0">ژورنال معاملات</h2><p class="market-intro">ثبت دستی معاملات؛ بدون اتصال معاملاتی یا توصیهٔ سرمایه‌گذاری</p></div><button class="pri" type="button" data-phase4-action="add-trade">+ ثبت معامله</button></div>${stateError ? message("داده‌ها فقط‌خواندنی هستند؛ خطای ذخیره‌سازی: " + stateError, true) : ""}${message("PnL تحقق‌یافته شامل کارمزد ورود تخصیص‌یافته، کارمزد خروج و هزینهٔ تأمین مالی واردشده برای همان بخش است. Break-even در نرخ برد شمرده می‌شود اما برد محسوب نمی‌شود. معاملات نیمه‌بسته تا تکمیل خروج از نرخ برد حذف‌اند. قیمت باز فقط با ثبت دستی معتبر است.")}${currencyWarning}<section class="card"><h3>تنظیم محاسبات</h3><label>سرمایهٔ آغازین برای افت سرمایه (اختیاری)<input type="text" inputmode="decimal" value="${escape(state.startingEquity || "")}" data-phase4-equity></label><div class="flt"><select aria-label="فیلتر ارز" data-phase4-filter="currency"><option value="">ارز اول</option>${optionTags(currencies.map((value) => [value, value]), selectedCurrency)}</select><select aria-label="فیلتر بازار" data-phase4-filter="market"><option value="">همهٔ بازارها</option>${optionTags(Object.entries(MARKET_LABELS), FILTERS.market)}</select><select aria-label="فیلتر وضعیت" data-phase4-filter="status"><option value="">همهٔ وضعیت‌ها</option>${optionTags([["open","باز"],["partially_closed","بخشی بسته"],["closed","بسته"]], FILTERS.status)}</select><select aria-label="فیلتر استراتژی" data-phase4-filter="strategy"><option value="">همهٔ استراتژی‌ها</option>${optionTags(strategies.map((value) => [value, value]), FILTERS.strategy)}</select><input aria-label="از تاریخ ورود" type="date" value="${escape(FILTERS.from)}" data-phase4-filter="from"><input aria-label="تا تاریخ ورود" type="date" value="${escape(FILTERS.to)}" data-phase4-filter="to"></div></section><div class="g">${cards}</div>${warnings.length ? `<section class="card phase4-message phase4-warning"><ul>${warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></section>` : ""}<div class="g">${groupPerformance("عملکرد به تفکیک استراتژی", report.byStrategy)}${groupPerformance("عملکرد به تفکیک بازار", report.byMarket)}${groupPerformance("عملکرد به تفکیک نماد", report.bySymbol)}</div><section class="card"><h3>فهرست معاملات (${displayed.length})</h3><div class="asset-table-wrap"><table class="phase4-table"><thead><tr><th>نماد / جزئیات</th><th>بازار / ورود</th><th>باقی‌مانده / کل</th><th>وضعیت / قیمت ورود</th><th>خالص تحقق‌یافته</th><th>تحقق‌نیافته</th><th>عملیات</th></tr></thead><tbody>${rows || '<tr><td colspan="7">معامله‌ای با این فیلتر ثبت نشده است.</td></tr>'}</tbody></table></div></section>`;
+    setTimeout(renderMMResults, 0);
+    return `<div class="top"><div><h2 style="margin:0">ژورنال معاملات</h2><p class="market-intro">ثبت دستی معاملات؛ بدون اتصال معاملاتی یا توصیهٔ سرمایه‌گذاری</p></div><button class="pri" type="button" data-phase4-action="add-trade">+ ثبت معامله</button></div>${stateError ? message("داده‌ها فقط‌خواندنی هستند؛ خطای ذخیره‌سازی: " + stateError, true) : ""}${message("PnL تحقق‌یافته شامل کارمزد ورود تخصیص‌یافته، کارمزد خروج و هزینهٔ تأمین مالی واردشده برای همان بخش است. Break-even در نرخ برد شمرده می‌شود اما برد محسوب نمی‌شود. معاملات نیمه‌بسته تا تکمیل خروج از نرخ برد حذف‌اند. قیمت باز فقط با ثبت دستی معتبر است.")}${currencyWarning}<section class="card"><h3>تنظیم محاسبات</h3><label>سرمایهٔ آغازین برای افت سرمایه (اختیاری)<input type="text" inputmode="decimal" value="${escape(state.startingEquity || "")}" data-phase4-equity></label><div class="flt"><select aria-label="حساب معاملاتی" data-phase4-account>${accounts.map((account) => `<option value="${escape(account.id)}"${account.id === selectedAccount ? " selected" : ""}>${escape(account.name)} (${escape(account.currency)})</option>`).join("")}${accounts.length ? "" : `<option value="">بدون حساب</option>`}</select><select aria-label="فیلتر ارز" data-phase4-filter="currency"><option value="">ارز اول</option>${optionTags(currencies.map((value) => [value, value]), selectedCurrency)}</select><select aria-label="فیلتر بازار" data-phase4-filter="market"><option value="">همهٔ بازارها</option>${optionTags(Object.entries(MARKET_LABELS), FILTERS.market)}</select><select aria-label="فیلتر وضعیت" data-phase4-filter="status"><option value="">همهٔ وضعیت‌ها</option>${optionTags([["open","باز"],["partially_closed","بخشی بسته"],["closed","بسته"]], FILTERS.status)}</select><select aria-label="فیلتر استراتژی" data-phase4-filter="strategy"><option value="">همهٔ استراتژی‌ها</option>${optionTags(strategies.map((value) => [value, value]), FILTERS.strategy)}</select><input aria-label="از تاریخ ورود" type="date" value="${escape(FILTERS.from)}" data-phase4-filter="from"><input aria-label="تا تاریخ ورود" type="date" value="${escape(FILTERS.to)}" data-phase4-filter="to"></div></section>${accountsSection}${mmSection}<div class="g">${accountCards}</div><div class="g">${cards}</div>${warnings.length ? `<section class="card phase4-message phase4-warning"><ul>${warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></section>` : ""}<div class="g">${groupPerformance("عملکرد به تفکیک استراتژی", report.byStrategy)}${groupPerformance("عملکرد به تفکیک بازار", report.byMarket)}${groupPerformance("عملکرد به تفکیک نماد", report.bySymbol)}</div><section class="card"><h3>فهرست معاملات (${displayed.length})</h3><div class="asset-table-wrap"><table class="phase4-table"><thead><tr><th>نماد / جزئیات</th><th>بازار / ورود</th><th>باقی‌مانده / کل</th><th>وضعیت / قیمت ورود</th><th>خالص تحقق‌یافته</th><th>تحقق‌نیافته</th><th>عملیات</th></tr></thead><tbody>${rows || '<tr><td colspan="7">معامله‌ای با این فیلتر ثبت نشده است.</td></tr>'}</tbody></table></div></section>`;
   }
 
   window.DaraPhase4UI = {
@@ -401,6 +629,16 @@
     },
   };
 
+
+  document.addEventListener("input", (event) => {
+    if (event.target instanceof Element) syncMM(event.target);
+  });
+  document.addEventListener("change", (event) => {
+    if (event.target instanceof Element) syncMM(event.target);
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest("[data-mm-to-trade]")) mmToTrade();
+  });
   document.addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
     const button = event.target.closest("[data-phase4-action]");
@@ -410,6 +648,9 @@
     if (action === "add-wallet") addWallet();
     else if (action === "sync-wallet") syncWallet(id);
     else if (action === "add-trade") tradeDialog();
+    else if (action === "add-account") accountDialog();
+    else if (action === "deposit") accountEventDialog(id, "deposit");
+    else if (action === "withdraw") accountEventDialog(id, "withdraw");
     else if (action === "edit-trade") window.DaraPhase4UI.edit(id);
     else if (action === "close-trade") window.DaraPhase4UI.closeTrade(id);
     else if (action === "mark-trade") window.DaraPhase4UI.mark(id);
@@ -420,6 +661,9 @@
     const target = event.target;
     if (target.matches("[data-phase4-classify]")) {
       classify(target.dataset.walletId, target.dataset.transactionId, target.value);
+    } else if (target.matches("[data-phase4-account]")) {
+      FILTERS.account = target.value;
+      window.DARA_RENDER?.();
     } else if (target.matches("[data-phase4-filter]")) {
       FILTERS[target.dataset.phase4Filter] = target.value;
       window.DARA_RENDER?.();

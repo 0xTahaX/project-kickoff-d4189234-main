@@ -166,11 +166,16 @@ test("creates and edits goals without touching contributions", () => {
   assert.deepEqual(created, {
     id: "g2",
     name: "خودرو",
+    description: "",
+    emoji: "",
     target: 5000,
     date: "",
+    start_date: TODAY,
     priority: 2,
     created_at: TODAY,
     contributions: [],
+    plan: null,
+    installments: [],
   });
 
   const edited = G.updateGoal(goal(), { name: " سفر نوروز ", target: 20_000_000 });
@@ -214,6 +219,9 @@ test("migration adds the default priority without losing an existing one", () =>
       target: 1000,
       date: "",
       priority: 4,
+      description: "",
+      emoji: "",
+      start_date: TODAY,
       created_at: TODAY,
       contributions: [],
     },
@@ -525,4 +533,165 @@ test("adding Jalali months clamps the day to the target month length", () => {
   assert.deepEqual(G.addJalaliMonths({ jy: 1403, jm: 12, jd: 30 }, 12), { jy: 1404, jm: 12, jd: 29 });
   assert.deepEqual(G.addJalaliMonths({ jy: 1405, jm: 8, jd: 10 }, 2), { jy: 1405, jm: 10, jd: 10 });
   assert.deepEqual(G.addJalaliMonths({ jy: 1405, jm: 11, jd: 10 }, 3), { jy: 1406, jm: 2, jd: 10 });
+});
+
+// ─── توضیحات، تاریخ شروع و ایموجی ───────────────────────────────────────────
+test("goal description, emoji and start date are stored with sensible defaults", () => {
+  const created = G.createGoal(
+    { name: "سفر", target: 9000, date: "", description: "  سفر تابستانی با خانواده  ", emoji: "✈️" },
+    { id: "d1", todayIso: "2026-11-01" },
+  );
+  assert.equal(created.description, "سفر تابستانی با خانواده");
+  assert.equal(created.emoji, "✈️");
+  assert.equal(created.start_date, "2026-11-01");
+
+  const explicit = G.createGoal(
+    { name: "x", target: 1000, date: "", start_date: "2026-12-01" },
+    { id: "d2", todayIso: "2026-11-01" },
+  );
+  assert.equal(explicit.start_date, "2026-12-01");
+  assert.equal(explicit.emoji, "");
+
+  const long = "x".repeat(G.DESCRIPTION_MAX + 50);
+  assert.equal(G.createGoal({ name: "x", target: 1, description: long }, { id: "d3", todayIso: "2026-11-01" }).description.length, G.DESCRIPTION_MAX);
+  assert.equal(G.createGoal({ name: "x", target: 1, start_date: "bad" }, { id: "d4", todayIso: "2026-11-01" }).start_date, "2026-11-01");
+});
+
+test("goal dates must not contradict each other", () => {
+  assert.equal(G.validateGoalDates("2026-11-01", "2026-12-01"), null);
+  assert.equal(G.validateGoalDates("2026-11-01", ""), null);
+  assert.ok(G.validateGoalDates("2026-12-01", "2026-11-01"));
+  assert.ok(G.validateGoalDates("", "2026-11-01"));
+});
+
+test("a goal with a future start date is not_started", () => {
+  const goal = { id: "n", name: "x", target: 1000, date: "2026-12-01", start_date: "2026-11-10", created_at: "2026-10-01", contributions: [{ id: "s", amount: 500, date: "2026-11-12" }] };
+  assert.equal(G.goalStatus(goal, "2026-11-01").status, "not_started");
+  assert.equal(G.goalStatus(goal, "2026-11-20").status, "on_track");
+});
+
+// ─── برنامهٔ پس‌انداز ───────────────────────────────────────────────────────
+const planGoal = (overrides = {}) => ({
+  id: "pg",
+  name: "لپ‌تاپ",
+  description: "",
+  emoji: "",
+  target: 10_000_000,
+  date: "",
+  start_date: "2026-10-01",
+  priority: 2,
+  created_at: "2026-10-01",
+  contributions: [],
+  plan: null,
+  installments: [],
+  ...overrides,
+});
+const withPlan = (plan, overrides = {}) => {
+  const goal = planGoal({ plan, ...overrides });
+  return G.ensurePlanInstallments(goal, "2026-11-01").goal;
+};
+
+test("daily, weekly and monthly plans generate due dates once", () => {
+  const daily = withPlan({ id: "p1", amount: 500_000, period: "daily", start_date: "2026-10-01", status: "active" });
+  assert.equal(daily.installments.length, 32); // ۳۱ روز مهر + امروز
+  assert.equal(daily.installments[0].due, "2026-10-01");
+  assert.equal(daily.installments.at(-1).due, "2026-11-01");
+
+  const weekly = withPlan({ id: "p2", amount: 500_000, period: "weekly", start_date: "2026-10-01", status: "active" });
+  assert.deepEqual(weekly.installments.map((i) => i.due), ["2026-10-01", "2026-10-08", "2026-10-15", "2026-10-22", "2026-10-29"]);
+
+  const monthly = withPlan({ id: "p3", amount: 500_000, period: "monthly", start_date: "2026-09-23", status: "active" }, { start_date: "2026-09-23" });
+  assert.deepEqual(monthly.installments.map((i) => i.due), ["2026-09-23", "2026-10-23"]);
+
+  const again = G.ensurePlanInstallments(daily, "2026-11-01");
+  assert.equal(again.changed, false);
+  assert.equal(again.goal.installments.length, 32);
+});
+
+test("late is derived for past dues only and differs from today's due", () => {
+  const goal = withPlan({ id: "p4", amount: 100_000, period: "daily", start_date: "2026-10-30", status: "active" }, { start_date: "2026-10-30" });
+  const yesterday = goal.installments.find((i) => i.due === "2026-10-31");
+  const today = goal.installments.find((i) => i.due === "2026-11-01");
+  assert.equal(G.installmentStatus(yesterday, goal.plan, "2026-11-01"), "late");
+  assert.equal(G.installmentStatus(today, goal.plan, "2026-11-01"), "pending");
+  assert.equal(G.nextPlanDue(goal, "2026-11-01"), "2026-11-02");
+
+  const summary = G.planSummary(goal, "2026-11-01");
+  assert.equal(summary.counts.late, 2);
+  assert.equal(summary.nextDue, "2026-11-02");
+});
+
+test("paying an installment records the actual amount and cannot duplicate", () => {
+  const goal = withPlan({ id: "p5", amount: 500_000, period: "daily", start_date: "2026-10-31", status: "active" }, { start_date: "2026-10-31" });
+  const due = goal.installments[0];
+  const paid = G.payInstallment(goal, due.id, { id: "c-pay", amount: 300_000, date: "2026-11-01" }, "2026-11-01");
+  assert.equal(paid.changed, true);
+  assert.equal(paid.goal.contributions[0].amount, 300_000);
+  assert.equal(G.savedOf(paid.goal), 300_000);
+  const installment = paid.goal.installments.find((i) => i.id === due.id);
+  assert.equal(installment.status, "done");
+  assert.equal(installment.paidAmount, 300_000);
+  assert.equal(installment.contributionId, "c-pay");
+
+  const again = G.payInstallment(paid.goal, due.id, { amount: 1_000 }, "2026-11-01");
+  assert.equal(again.changed, false);
+  assert.equal(again.reason, "already_done");
+  assert.equal(again.goal.contributions.length, 1);
+
+  const cancelled = G.cancelInstallment(paid.goal, due.id);
+  assert.equal(cancelled.installments.find((i) => i.id === due.id).status, "cancelled");
+});
+
+test("deleting a linked contribution reopens its installment", () => {
+  const goal = withPlan({ id: "p6", amount: 500_000, period: "daily", start_date: "2026-10-31", status: "active" }, { start_date: "2026-10-31" });
+  const paid = G.payInstallment(goal, goal.installments[0].id, { id: "c-del", amount: 500_000, date: "2026-11-01" }, "2026-11-01");
+  const reopened = G.deleteContribution(paid.goal, "c-del");
+  assert.equal(reopened.contributions.length, 0);
+  assert.equal(reopened.installments[0].status, "pending");
+  assert.equal(reopened.installments[0].contributionId, undefined);
+});
+
+test("paused plans do not count as late and resume keeps the pause window", () => {
+  const goal = withPlan({ id: "p7", amount: 100_000, period: "daily", start_date: "2026-10-20", status: "active" }, { start_date: "2026-10-20" });
+  const paused = G.pausePlan(goal, "2026-10-25");
+  const due = paused.installments.find((i) => i.due === "2026-10-27");
+  assert.equal(G.installmentStatus(due, paused.plan, "2026-10-28"), "paused");
+  const resumed = G.resumePlan(paused, "2026-11-01");
+  assert.equal(G.installmentStatus(due, resumed.plan, "2026-11-01"), "paused");
+  const resumedSummary = G.planSummary(resumed, "2026-11-01");
+  assert.equal(resumedSummary.counts.late, 5); // فقط روزهای قبل از توقف\n  assert.equal(resumedSummary.counts.paused, 5); // ۲۵ مهر تا ۱ آبان
+});
+
+test("editing a plan keeps history and regenerates future dues", () => {
+  const goal = withPlan({ id: "p8", amount: 100_000, period: "daily", start_date: "2026-10-01", status: "active" });
+  const paid = G.payInstallment(goal, goal.installments[0].id, { id: "c-keep", amount: 100_000, date: "2026-10-01" }, "2026-10-01");
+  const edited = G.applyPlan(paid.goal, { id: "p8", amount: 700_000, period: "weekly", start_date: "2026-10-01", status: "active" }, "2026-10-05");
+  const done = edited.installments.find((i) => i.id === paid.goal.installments[0].id);
+  assert.equal(done.status, "done");
+  assert.equal(done.paidAmount, 100_000);
+  assert.equal(edited.plan.amount, 700_000);
+  assert.equal(edited.plan.period, "weekly");
+  assert.equal(edited.installments.some((i) => i.due === "2026-10-02" || i.due === "2026-10-03"), true, "دوره‌های گذشته حفظ می‌شوند");
+  assert.equal(edited.installments.filter((i) => i.due > "2026-10-05").length, 0);
+  assert.equal(edited.contributions.length, 1);
+});
+
+test("removing a plan keeps contributions", () => {
+  const goal = withPlan({ id: "p9", amount: 100_000, period: "daily", start_date: "2026-10-31", status: "active" }, { start_date: "2026-10-31" });
+  const paid = G.payInstallment(goal, goal.installments[0].id, { id: "c-rm", amount: 100_000, date: "2026-10-31" }, "2026-11-01");
+  const removed = G.removePlan(paid.goal);
+  assert.equal(removed.plan, null);
+  assert.deepEqual(removed.installments, []);
+  assert.equal(removed.contributions.length, 1);
+  assert.equal(G.savedOf(removed), 100_000);
+});
+
+test("plan forecast projects completion from the next due", () => {
+  const goal = withPlan(
+    { id: "p10", amount: 1_000_000, period: "daily", start_date: "2026-10-01", status: "active" },
+    { target: 10_000_000, contributions: [{ id: "s", amount: 3_000_000, date: "2026-10-20" }] },
+  );
+  const summary = G.planSummary(goal, "2026-11-01");
+  assert.equal(summary.forecast.periods, 7);
+  assert.equal(summary.forecast.date, "2026-11-08");
 });

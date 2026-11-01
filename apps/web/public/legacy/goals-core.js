@@ -367,26 +367,46 @@
     return {
       id: options.id,
       name: normalizeName(input.name),
+      description: normalizeDescription(input.description),
+      emoji: normalizeEmoji(input.emoji),
       target: input.target,
       date: input.date || "",
+      start_date: parseIsoDate(input.start_date) ? input.start_date : todayIso,
       priority: normalizePriority(input.priority),
       created_at: todayIso,
       contributions: [],
+      plan: null,
+      installments: [],
     };
   }
 
-  // ویرایش فقط نام/مبلغ/تاریخ/اولویت را عوض می‌کند؛ شناسه، تاریخ ساخت و مشارکت‌ها دست‌نخورده می‌مانند.
+  // ویرایش نام/مبلغ/تاریخ/اولویت/توضیحات/ایموجی/تاریخ شروع؛ برنامه جداگانه ویرایش می‌شود.
   function updateGoal(goal, patch) {
+    const startDate =
+      patch.start_date === undefined
+        ? parseIsoDate(goal.start_date)
+          ? goal.start_date
+          : parseIsoDate(goal.created_at)
+            ? goal.created_at
+            : ""
+        : parseIsoDate(patch.start_date)
+          ? patch.start_date
+          : goal.start_date;
     return {
       ...goal,
       name: patch.name === undefined ? goal.name : normalizeName(patch.name),
+      description:
+        patch.description === undefined ? goal.description : normalizeDescription(patch.description),
+      emoji: patch.emoji === undefined ? goal.emoji : normalizeEmoji(patch.emoji),
       target: patch.target === undefined ? goal.target : patch.target,
       date: patch.date === undefined ? goal.date : patch.date || "",
+      start_date: startDate,
       priority:
         patch.priority === undefined
           ? normalizePriority(goal.priority)
           : normalizePriority(patch.priority),
       contributions: Array.isArray(goal.contributions) ? goal.contributions : [],
+      installments: Array.isArray(goal.installments) ? goal.installments : [],
     };
   }
 
@@ -402,10 +422,17 @@
 
   function updateContribution(goal, contributionId, patch) {
     const contributions = Array.isArray(goal.contributions) ? goal.contributions : [];
+    const nextAmount = isPositiveAmount(patch.amount) ? patch.amount : null;
     return {
       ...goal,
       contributions: contributions.map((contribution) =>
         contribution.id === contributionId ? { ...contribution, ...patch } : contribution,
+      ),
+      // اگر این مشارکت به یک دورهٔ برنامه وصل است، مبلغ واقعیِ دوره هم به‌روز می‌شود.
+      installments: (Array.isArray(goal.installments) ? goal.installments : []).map((installment) =>
+        installment.contributionId === contributionId && nextAmount
+          ? { ...installment, paidAmount: nextAmount }
+          : installment,
       ),
     };
   }
@@ -415,6 +442,18 @@
     return {
       ...goal,
       contributions: contributions.filter((contribution) => contribution.id !== contributionId),
+      // حذف مشارکت، دورهٔ متصل را به «در انتظار» برمی‌گرداند تا دوباره قابل ثبت باشد.
+      installments: (Array.isArray(goal.installments) ? goal.installments : []).map((installment) =>
+        installment.contributionId === contributionId
+          ? {
+              ...installment,
+              status: "pending",
+              contributionId: undefined,
+              paidAmount: undefined,
+              paid_date: undefined,
+            }
+          : installment,
+      ),
     };
   }
 
@@ -458,13 +497,15 @@
       expectedPercent: null,
     };
     if (progress.completed) return { ...base, status: "completed", actualPercent: 100 };
-    const start = dayNumber(goal.created_at);
+    // مبنای انتظار زمانی، تاریخ شروع هدف است (اهداف قدیمی: تاریخ ساخت).
+    const startIso = parseIsoDate(goal.start_date) ? goal.start_date : goal.created_at;
+    const start = dayNumber(startIso);
     const end = dayNumber(goal.date);
     const now = dayNumber(todayIso);
     if (start === null || end === null || now === null || end <= start)
       return { ...base, status: "unknown" };
-    // تاریخ ساخت در آینده یعنی داده نامعتبر است، نه «۰٪ پیشرفت».
-    if (start > now) return { ...base, status: "unknown" };
+    // شروع در آینده یعنی هدف هنوز آغاز نشده است.
+    if (start > now) return { ...base, status: "not_started", expectedPercent: 0 };
     const totalDays = end - start;
     const elapsedDays = Math.min(Math.max(now - start, 0), totalDays);
     const expected = Math.floor((elapsedDays * 100) / totalDays);
@@ -536,6 +577,255 @@
       windowStart,
       windowEnd,
     };
+  }
+
+  // ─── برنامهٔ پس‌انداز دوره‌ای ───────────────────────────────────────────────
+  const DESCRIPTION_MAX = 300;
+  const PLAN_PERIODS = ["daily", "weekly", "monthly"];
+  const PLAN_STATUSES = ["active", "paused", "completed"];
+  const MAX_INSTALLMENTS = 2000;
+
+  function normalizeDescription(value) {
+    return String(value ?? "")
+      .replace(/\r\n/g, "\n")
+      .trim()
+      .slice(0, DESCRIPTION_MAX);
+  }
+
+  function normalizeEmoji(value) {
+    const text = String(value ?? "").trim();
+    return text && text.length <= 8 ? text : "";
+  }
+
+  function shiftIso(iso, days) {
+    const parsed = parseIsoDate(iso);
+    if (!parsed) return null;
+    const date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  }
+
+  // n-امین سررسید از تاریخ شروع؛ برای ماهانه روز اصلی حفظ می‌شود (بدون انحراف).
+  function dueDateAt(plan, index) {
+    const start = parseIsoDate(plan.start_date);
+    if (!start || index < 0) return null;
+    if (plan.period === "daily") return shiftIso(plan.start_date, index);
+    if (plan.period === "weekly") return shiftIso(plan.start_date, index * 7);
+    const jalali = isoToJalali(plan.start_date);
+    if (!jalali) return null;
+    const parts = addJalaliMonths({ jy: jalali.jy, jm: jalali.jm, jd: jalali.jd }, index);
+    return jalaliToIso(parts.jy, parts.jm, parts.jd);
+  }
+
+  // همهٔ سررسیدها از شروع تا «تا تاریخ» (شامل)؛ سقف تعداد برای جلوگیری از تولید بی‌پایان.
+  function planDueDates(plan, untilIso) {
+    const dates = [];
+    if (!plan || !parseIsoDate(plan.start_date) || !parseIsoDate(untilIso)) return dates;
+    for (let index = 0; index < MAX_INSTALLMENTS; index += 1) {
+      const due = dueDateAt(plan, index);
+      if (!due || due > untilIso) break;
+      dates.push(due);
+    }
+    return dates;
+  }
+
+  function normalizePlan(raw) {
+    if (!raw || typeof raw !== "object") return { plan: null, changed: raw !== undefined };
+    const amount = isPositiveAmount(raw.amount) ? raw.amount : null;
+    const start = parseIsoDate(raw.start_date) ? raw.start_date : null;
+    if (!amount || !start) return { plan: null, changed: true };
+    const plan = {
+      id: typeof raw.id === "string" && raw.id ? raw.id : `plan:${start}`,
+      amount,
+      period: PLAN_PERIODS.includes(raw.period) ? raw.period : "monthly",
+      start_date: start,
+      status: PLAN_STATUSES.includes(raw.status) ? raw.status : "active",
+      created_at: parseIsoDate(raw.created_at) ? raw.created_at : start,
+    };
+    if (parseIsoDate(raw.paused_at)) plan.paused_at = raw.paused_at;
+    if (parseIsoDate(raw.resumed_at)) plan.resumed_at = raw.resumed_at;
+    const changed =
+      raw.id !== plan.id ||
+      raw.amount !== plan.amount ||
+      raw.period !== plan.period ||
+      raw.start_date !== plan.start_date ||
+      raw.status !== plan.status ||
+      raw.created_at !== plan.created_at;
+    return { plan, changed };
+  }
+
+  // دوره‌های «در انتظار» که موعدشان هنوز نرسیده، با تغییر برنامه بازتولید می‌شوند؛
+  // دوره‌های گذشته و انجام‌شده/لغوشده دست‌نخورده می‌مانند.
+  function applyPlan(goal, input, todayIso) {
+    if (!input) return removePlan(goal);
+    const normalized = normalizePlan({
+      ...input,
+      id: input.id || (goal.plan && goal.plan.id) || `plan:${todayIso}`,
+      created_at: (goal.plan && goal.plan.created_at) || todayIso,
+    });
+    if (!normalized.plan) return { ...goal, plan: null, installments: [] };
+    const kept = (Array.isArray(goal.installments) ? goal.installments : []).filter(
+      (installment) =>
+        installment.status !== "pending" || installment.due <= todayIso,
+    );
+    const next = { ...goal, plan: normalized.plan, installments: kept };
+    const ensured = ensurePlanInstallments(next, todayIso);
+    return ensured.goal;
+  }
+
+  function removePlan(goal) {
+    return { ...goal, plan: null, installments: [] };
+  }
+
+  // دوره‌های تا امروز را یک‌بار می‌سازد؛ اجرای دوباره رکورد تکراری نمی‌سازد.
+  function ensurePlanInstallments(goal, todayIso) {
+    const plan = goal.plan;
+    if (!plan) return { goal, changed: false };
+    const existing = Array.isArray(goal.installments) ? goal.installments : [];
+    const byDue = new Map(existing.map((installment) => [installment.due, installment]));
+    const installments = existing.slice();
+    let changed = false;
+    planDueDates(plan, todayIso).forEach((due) => {
+      if (byDue.has(due)) return;
+      installments.push({
+        id: `${plan.id}:${due}`,
+        due,
+        amount: plan.amount,
+        status: "pending",
+      });
+      changed = true;
+    });
+    installments.sort((a, b) => (a.due < b.due ? -1 : 1));
+    return { goal: { ...goal, installments }, changed };
+  }
+
+  function inPauseWindow(due, plan) {
+    if (!plan.paused_at || due < plan.paused_at) return false;
+    if (!plan.resumed_at) return true;
+    return due <= plan.resumed_at;
+  }
+
+  // وضعیت مؤثر هر دوره: انجام‌شده/لغوشده ذخیره می‌شوند، «تأخیر» همیشه مشتق می‌شود.
+  function installmentStatus(installment, plan, todayIso) {
+    if (!installment) return "pending";
+    if (installment.status === "done") return "done";
+    if (installment.status === "cancelled") return "cancelled";
+    if (plan && inPauseWindow(installment.due, plan)) return "paused";
+    return installment.due < todayIso ? "late" : "pending";
+  }
+
+  function nextPlanDue(goal, todayIso) {
+    const plan = goal.plan;
+    if (!plan) return null;
+    const start = parseIsoDate(plan.start_date);
+    if (!start) return null;
+    for (let index = 0; index < MAX_INSTALLMENTS; index += 1) {
+      const due = dueDateAt(plan, index);
+      if (!due) return null;
+      if (due > todayIso) return due;
+    }
+    return null;
+  }
+
+  function planSummary(goal, todayIso) {
+    const plan = goal.plan;
+    if (!plan) return null;
+    const progress = progressOf(goal);
+    const installments = Array.isArray(goal.installments) ? goal.installments : [];
+    const counts = { done: 0, late: 0, cancelled: 0, pending: 0, paused: 0 };
+    installments.forEach((installment) => {
+      counts[installmentStatus(installment, plan, todayIso)] += 1;
+    });
+    const paid = installments.reduce(
+      (sum, installment) =>
+        installment.status === "done" ? sum + (installment.paidAmount || installment.amount) : sum,
+      0,
+    );
+    const nextDue = nextPlanDue(goal, todayIso);
+    const remaining = progress ? progress.remaining : 0;
+    const completed = (progress && progress.completed) || plan.status === "completed";
+    let forecast = null;
+    if (!completed && nextDue && isPositiveAmount(plan.amount)) {
+      const periods = Math.ceil(remaining / plan.amount);
+      const last = dueDateAt(
+        { ...plan, start_date: nextDue },
+        Math.max(0, periods - 1),
+      );
+      if (last) forecast = { date: last, periods, amount: plan.amount };
+    }
+    return {
+      plan,
+      counts,
+      paid,
+      nextDue,
+      completed,
+      forecast,
+      total: installments.length,
+    };
+  }
+
+  // ثبت انجام یک دوره: مشارکت واقعی اضافه می‌شود و خود دوره «انجام‌شده» می‌شود.
+  function payInstallment(goal, installmentId, payment, todayIso) {
+    const installments = Array.isArray(goal.installments) ? goal.installments : [];
+    const installment = installments.find((entry) => entry.id === installmentId);
+    if (!installment) return { goal, changed: false, reason: "missing" };
+    if (installmentStatus(installment, goal.plan, todayIso) === "done")
+      return { goal, changed: false, reason: "already_done" };
+    if (installmentStatus(installment, goal.plan, todayIso) === "cancelled")
+      return { goal, changed: false, reason: "cancelled" };
+    const amount = isPositiveAmount(payment.amount) ? payment.amount : null;
+    if (!amount) return { goal, changed: false, reason: "invalid_amount" };
+    const date = parseIsoDate(payment.date) && payment.date <= todayIso ? payment.date : todayIso;
+    const contribution = {
+      id: payment.id || `${goal.id}:pay:${installment.due}`,
+      amount,
+      date,
+      note: payment.note || "",
+    };
+    return {
+      goal: {
+        ...goal,
+        contributions: [...(Array.isArray(goal.contributions) ? goal.contributions : []), contribution],
+        installments: installments.map((entry) =>
+          entry.id === installmentId
+            ? {
+                ...entry,
+                status: "done",
+                contributionId: contribution.id,
+                paidAmount: amount,
+                paid_date: date,
+              }
+            : entry,
+        ),
+      },
+      changed: true,
+      contribution,
+    };
+  }
+
+  function cancelInstallment(goal, installmentId) {
+    return {
+      ...goal,
+      installments: (Array.isArray(goal.installments) ? goal.installments : []).map((installment) =>
+        installment.id === installmentId ? { ...installment, status: "cancelled" } : installment,
+      ),
+    };
+  }
+
+  function pausePlan(goal, todayIso) {
+    if (!goal.plan) return goal;
+    return { ...goal, plan: { ...goal.plan, status: "paused", paused_at: todayIso } };
+  }
+
+  function resumePlan(goal, todayIso) {
+    if (!goal.plan) return goal;
+    return { ...goal, plan: { ...goal.plan, status: "active", resumed_at: todayIso } };
+  }
+
+  function validateGoalDates(startDate, endDate) {
+    if (!startDate) return "تاریخ شروع معتبر نیست.";
+    if (endDate && endDate < startDate) return "تاریخ هدف نمی‌تواند قبل از تاریخ شروع باشد.";
+    return null;
   }
 
   // ─── مهاجرت داده‌های قدیمی ─────────────────────────────────────────────────
@@ -622,6 +912,48 @@
       changed = true;
     }
 
+    // توضیحات/ایموجی/تاریخ شروع: اهداف قدیمی مقادیر پیش‌فرض سازگار می‌گیرند.
+    if (typeof goal.description !== "string") {
+      goal.description = "";
+      changed = true;
+    } else if (normalizeDescription(goal.description) !== goal.description) {
+      goal.description = normalizeDescription(goal.description);
+      changed = true;
+    }
+    if (typeof goal.emoji !== "string") {
+      goal.emoji = "";
+      changed = true;
+    } else if (normalizeEmoji(goal.emoji) !== goal.emoji) {
+      goal.emoji = normalizeEmoji(goal.emoji);
+      changed = true;
+    }
+    if (!parseIsoDate(goal.start_date)) {
+      goal.start_date = parseIsoDate(goal.created_at) ? goal.created_at : todayIso;
+      changed = true;
+    }
+
+    // برنامهٔ پس‌انداز: نرمال‌سازی و ساخت دوره‌های تا امروز (یک‌بار برای هر سررسید).
+    if (goal.plan !== undefined) {
+      const normalizedPlan = normalizePlan(goal.plan);
+      if (!normalizedPlan.plan) {
+        if (goal.plan !== null) {
+          goal.plan = null;
+          changed = true;
+        }
+      } else {
+        goal.plan = normalizedPlan.plan;
+        if (normalizedPlan.changed) changed = true;
+      }
+    }
+    if (goal.plan) {
+      const ensured = ensurePlanInstallments(goal, todayIso);
+      goal.installments = ensured.goal.installments;
+      if (ensured.changed) changed = true;
+    } else if (Array.isArray(goal.installments) && goal.installments.length) {
+      goal.installments = [];
+      changed = true;
+    }
+
     const usedIds = new Set();
     goal.contributions = goal.contributions.map((contribution, index) => {
       const normalized = normalizeContribution(contribution, String(goal.id), index, usedIds);
@@ -688,6 +1020,24 @@
     PRIORITIES,
     DEFAULT_PRIORITY,
     normalizePriority,
+    DESCRIPTION_MAX,
+    PLAN_PERIODS,
+    PLAN_STATUSES,
+    normalizeDescription,
+    normalizeEmoji,
+    normalizePlan,
+    planDueDates,
+    ensurePlanInstallments,
+    installmentStatus,
+    planSummary,
+    nextPlanDue,
+    applyPlan,
+    removePlan,
+    pausePlan,
+    resumePlan,
+    payInstallment,
+    cancelInstallment,
+    validateGoalDates,
     migrateGoal,
     migrateState,
   };

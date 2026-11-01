@@ -145,12 +145,17 @@
                   "categories-core.js",
                   () =>
                     loadScript(
-                      "assets-core.js",
+                      "emoji-core.js",
                       () =>
-                        loadScript("assets-ui.js", () =>
-                          loadScript("markets-ui.js", loadPhase4, loadPhase4),
+                        loadScript(
+                          "assets-core.js",
+                          () =>
+                            loadScript("assets-ui.js", () =>
+                              loadScript("markets-ui.js", loadPhase4, loadPhase4),
+                            ),
+                          () => fail("بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید."),
                         ),
-                      () => fail("بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید."),
+                      () => fail("بارگذاری هستهٔ ایموجی ناموفق بود. صفحه را دوباره باز کنید."),
                     ),
                   () => fail("بارگذاری هستهٔ دسته‌بندی‌ها ناموفق بود. صفحه را دوباره باز کنید."),
                 ),
