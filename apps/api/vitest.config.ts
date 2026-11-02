@@ -1,10 +1,12 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig } from 'vitest/config';
 
-// تست‌ها فقط از سورس اجرا می‌شوند. بدون این محدوده، فایل‌های تست کامپایل‌شدهٔ dist هم دوباره
-// اجرا می‌شوند و نتیجهٔ قدیمی را سبز نشان می‌دهند.
 export default defineConfig({
+  server: {
+    host: '0.0.0.0',
+    allowedHosts: ['cycle-jessica-black-aaa.trycloudflare.com'],
+  },
   test: {
-    include: ["src/**/*.test.ts"],
-    environment: "node",
+    include: ['src/**/*.test.ts'],
+    environment: 'node',
   },
 });
