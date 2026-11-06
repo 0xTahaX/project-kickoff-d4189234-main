@@ -554,6 +554,63 @@
       ["Expectancy", report.expectancy],
       ["افت سرمایه", report.maxDrawdown ? `${format(report.maxDrawdown.amount)} · ${format(report.maxDrawdown.percent, 2)}٪` : "دادهٔ کافی نیست"],
     ].map(([label, value]) => `<div class="card kpi"><small>${escape(label)}${selectedCurrency ? ` · ${escape(selectedCurrency)}` : ""}</small><b>${value == null ? "—" : escape(value)}</b></div>`).join("");
+    const charts = window.DaraCharts;
+    const closedFiltered = displayed.filter((trade) => trade.status === "closed");
+    const shortDate = (iso) =>
+      new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric", timeZone: "Asia/Tehran" }).format(new Date(iso));
+    const equityPoints = selectedAccount ? Core.equityCurve(state, selectedAccount) : [];
+    const equityChart = charts && equityPoints.length > 1
+      ? charts.line({ labels: equityPoints.map((point) => shortDate(point.at)), values: equityPoints.map((point) => Number(point.balance)), format: (value) => format(value, 2), ariaLabel: "Equity Curve" })
+      : charts ? charts.empty("برای رسم Equity Curve به تراکنش‌های ثبت‌شده و حساب نیاز است.") : "";
+    const directionData = ["long", "short"].map((direction) => {
+      const trades = closedFiltered.filter((trade) => trade.direction === direction);
+      const net = trades.reduce((total, trade) => total + Number(Core.tradeResult(trade).netRealized), 0);
+      return { direction, net, count: trades.length };
+    });
+    const directionChart = charts
+      ? charts.bar({ labels: ["Long", "Short"], series: [{ name: "خالص", values: directionData.map((item) => item.net), color: "var(--pri)" }], format: (value) => format(value, 2), ariaLabel: "عملکرد Long و Short" })
+      : "";
+    const winCount = closedFiltered.filter((trade) => Number(Core.tradeResult(trade).netRealized) > 0).length;
+    const lossCount = closedFiltered.filter((trade) => Number(Core.tradeResult(trade).netRealized) < 0).length;
+    const evenCount = closedFiltered.filter((trade) => Number(Core.tradeResult(trade).netRealized) === 0).length;
+    const outcomeChart = charts
+      ? charts.donut({ items: [{ label: "برد", value: winCount, color: "var(--g)" }, { label: "باخت", value: lossCount, color: "var(--r)" }, { label: "سربه‌سر", value: evenCount, color: "var(--mu)" }], title: "نتیجه" })
+      : charts.empty();
+    const groupEntries = (groups) => Object.entries(groups).slice(0, 8);
+    const symbolEntries = groupEntries(report.bySymbol);
+    const strategyEntries = groupEntries(report.byStrategy);
+    const symbolChart = charts && symbolEntries.length
+      ? charts.bar({ labels: symbolEntries.map(([label]) => label), series: [{ name: "خالص", values: symbolEntries.map(([, value]) => Number(value)), color: "var(--g)" }], format: (value) => format(value, 2), ariaLabel: "عملکرد نمادها" })
+      : charts ? charts.empty("معاملهٔ بسته‌شده‌ای برای تحلیل نماد نیست.") : "";
+    const strategyChart = charts && strategyEntries.length
+      ? charts.bar({ labels: strategyEntries.map(([label]) => label), series: [{ name: "خالص", values: strategyEntries.map(([, value]) => Number(value)), color: "var(--pri)" }], format: (value) => format(value, 2), ariaLabel: "عملکرد استراتژی‌ها" })
+      : charts ? charts.empty("معاملهٔ بسته‌شده‌ای برای تحلیل استراتژی نیست.") : "";
+    const rrBuckets = [0, 0, 0, 0, 0];
+    closedFiltered.forEach((trade) => {
+      const rr = Core.riskReward(trade);
+      if (rr == null) return;
+      const value = Number(rr);
+      if (!Number.isFinite(value) || value <= 0) return;
+      const index = value < 1 ? 0 : value < 2 ? 1 : value < 3 ? 2 : value < 5 ? 3 : 4;
+      rrBuckets[index] += 1;
+    });
+    const rrChart = charts && rrBuckets.some(Boolean)
+      ? charts.bar({ labels: ["<1", "1–2", "2–3", "3–5", "5+"], series: [{ name: "تعداد", values: rrBuckets, color: "var(--pri)" }], format: (value) => format(value, 0), ariaLabel: "توزیع R:R" })
+      : charts ? charts.empty("برای توزیع R:R به معامله با حد ضرر و حد سود نیاز است.") : "";
+    const chartsHtml = charts
+      ? `<div class="dash-grid">
+          <section class="card chart-card wide"><header class="card-head"><div><h3>Equity Curve</h3><small>موجودی حساب بر اساس رویدادهای واقعی</small></div></header>${equityChart}</section>
+          <section class="card chart-card"><header class="card-head"><div><h3>Long و Short</h3><small>سود خالص تحقق‌یافته</small></div></header>${directionChart}</section>
+        </div>
+        <div class="dash-grid">
+          <section class="card chart-card"><header class="card-head"><div><h3>عملکرد نماد</h3><small>تا هشت نماد برتر</small></div></header>${symbolChart}</section>
+          <section class="card chart-card"><header class="card-head"><div><h3>عملکرد استراتژی</h3><small>خالص تحقق‌یافته</small></div></header>${strategyChart}</section>
+        </div>
+        <div class="dash-grid">
+          <section class="card chart-card"><header class="card-head"><div><h3>توزیع R:R</h3><small>تعداد معاملات در بازه‌های R</small></div></header>${rrChart}</section>
+          <section class="card chart-card"><header class="card-head"><div><h3>نتیجهٔ معاملات</h3><small>برد / باخت / سربه‌سر</small></div></header>${outcomeChart}</section>
+        </div>`
+      : "";
     const rows = displayed.map((trade) => {
       const result = trade.result;
       const rr = Core.riskReward(trade);
@@ -593,7 +650,7 @@
       ? message(`ارزها با هم جمع نمی‌شوند؛ نتایج فقط برای ${selectedCurrency || "ارز انتخاب‌شده"} هستند.`)
       : "";
     setTimeout(renderMMResults, 0);
-    return `<div class="top"><div><h2 style="margin:0">ژورنال معاملات</h2><p class="market-intro">ثبت دستی معاملات؛ بدون اتصال معاملاتی یا توصیهٔ سرمایه‌گذاری</p></div><button class="pri" type="button" data-phase4-action="add-trade">+ ثبت معامله</button></div>${stateError ? message("داده‌ها فقط‌خواندنی هستند؛ خطای ذخیره‌سازی: " + stateError, true) : ""}${message("PnL تحقق‌یافته شامل کارمزد ورود تخصیص‌یافته، کارمزد خروج و هزینهٔ تأمین مالی واردشده برای همان بخش است. Break-even در نرخ برد شمرده می‌شود اما برد محسوب نمی‌شود. معاملات نیمه‌بسته تا تکمیل خروج از نرخ برد حذف‌اند. قیمت باز فقط با ثبت دستی معتبر است.")}${currencyWarning}<section class="card"><h3>تنظیم محاسبات</h3><label>سرمایهٔ آغازین برای افت سرمایه (اختیاری)<input type="text" inputmode="decimal" value="${escape(state.startingEquity || "")}" data-phase4-equity></label><div class="flt"><select aria-label="حساب معاملاتی" data-phase4-account>${accounts.map((account) => `<option value="${escape(account.id)}"${account.id === selectedAccount ? " selected" : ""}>${escape(account.name)} (${escape(account.currency)})</option>`).join("")}${accounts.length ? "" : `<option value="">بدون حساب</option>`}</select><select aria-label="فیلتر ارز" data-phase4-filter="currency"><option value="">ارز اول</option>${optionTags(currencies.map((value) => [value, value]), selectedCurrency)}</select><select aria-label="فیلتر بازار" data-phase4-filter="market"><option value="">همهٔ بازارها</option>${optionTags(Object.entries(MARKET_LABELS), FILTERS.market)}</select><select aria-label="فیلتر وضعیت" data-phase4-filter="status"><option value="">همهٔ وضعیت‌ها</option>${optionTags([["open","باز"],["partially_closed","بخشی بسته"],["closed","بسته"]], FILTERS.status)}</select><select aria-label="فیلتر استراتژی" data-phase4-filter="strategy"><option value="">همهٔ استراتژی‌ها</option>${optionTags(strategies.map((value) => [value, value]), FILTERS.strategy)}</select><input aria-label="از تاریخ ورود" type="date" value="${escape(FILTERS.from)}" data-phase4-filter="from"><input aria-label="تا تاریخ ورود" type="date" value="${escape(FILTERS.to)}" data-phase4-filter="to"></div></section>${accountsSection}${mmSection}<div class="g">${accountCards}</div><div class="g">${cards}</div>${warnings.length ? `<section class="card phase4-message phase4-warning"><ul>${warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></section>` : ""}<div class="g">${groupPerformance("عملکرد به تفکیک استراتژی", report.byStrategy)}${groupPerformance("عملکرد به تفکیک بازار", report.byMarket)}${groupPerformance("عملکرد به تفکیک نماد", report.bySymbol)}</div><section class="card"><h3>فهرست معاملات (${displayed.length})</h3><div class="asset-table-wrap"><table class="phase4-table"><thead><tr><th>نماد / جزئیات</th><th>بازار / ورود</th><th>باقی‌مانده / کل</th><th>وضعیت / قیمت ورود</th><th>خالص تحقق‌یافته</th><th>تحقق‌نیافته</th><th>عملیات</th></tr></thead><tbody>${rows || '<tr><td colspan="7">معامله‌ای با این فیلتر ثبت نشده است.</td></tr>'}</tbody></table></div></section>`;
+    return `<div class="top"><div><h2 style="margin:0">ژورنال معاملات</h2><p class="market-intro">ثبت دستی معاملات؛ بدون اتصال معاملاتی یا توصیهٔ سرمایه‌گذاری</p></div><button class="pri" type="button" data-phase4-action="add-trade">+ ثبت معامله</button></div>${stateError ? message("داده‌ها فقط‌خواندنی هستند؛ خطای ذخیره‌سازی: " + stateError, true) : ""}${message("PnL تحقق‌یافته شامل کارمزد ورود تخصیص‌یافته، کارمزد خروج و هزینهٔ تأمین مالی واردشده برای همان بخش است. Break-even در نرخ برد شمرده می‌شود اما برد محسوب نمی‌شود. معاملات نیمه‌بسته تا تکمیل خروج از نرخ برد حذف‌اند. قیمت باز فقط با ثبت دستی معتبر است.")}${currencyWarning}<section class="card"><h3>تنظیم محاسبات</h3><label>سرمایهٔ آغازین برای افت سرمایه (اختیاری)<input type="text" inputmode="decimal" value="${escape(state.startingEquity || "")}" data-phase4-equity></label><div class="flt"><select aria-label="حساب معاملاتی" data-phase4-account>${accounts.map((account) => `<option value="${escape(account.id)}"${account.id === selectedAccount ? " selected" : ""}>${escape(account.name)} (${escape(account.currency)})</option>`).join("")}${accounts.length ? "" : `<option value="">بدون حساب</option>`}</select><select aria-label="فیلتر ارز" data-phase4-filter="currency"><option value="">ارز اول</option>${optionTags(currencies.map((value) => [value, value]), selectedCurrency)}</select><select aria-label="فیلتر بازار" data-phase4-filter="market"><option value="">همهٔ بازارها</option>${optionTags(Object.entries(MARKET_LABELS), FILTERS.market)}</select><select aria-label="فیلتر وضعیت" data-phase4-filter="status"><option value="">همهٔ وضعیت‌ها</option>${optionTags([["open","باز"],["partially_closed","بخشی بسته"],["closed","بسته"]], FILTERS.status)}</select><select aria-label="فیلتر استراتژی" data-phase4-filter="strategy"><option value="">همهٔ استراتژی‌ها</option>${optionTags(strategies.map((value) => [value, value]), FILTERS.strategy)}</select><input aria-label="از تاریخ ورود" type="date" value="${escape(FILTERS.from)}" data-phase4-filter="from"><input aria-label="تا تاریخ ورود" type="date" value="${escape(FILTERS.to)}" data-phase4-filter="to"></div></section>${accountsSection}${mmSection}<div class="g">${accountCards}</div><div class="g">${cards}</div>${chartsHtml}${warnings.length ? `<section class="card phase4-message phase4-warning"><ul>${warnings.map((warning) => `<li>${escape(warning)}</li>`).join("")}</ul></section>` : ""}<div class="g">${groupPerformance("عملکرد به تفکیک استراتژی", report.byStrategy)}${groupPerformance("عملکرد به تفکیک بازار", report.byMarket)}${groupPerformance("عملکرد به تفکیک نماد", report.bySymbol)}</div><section class="card"><h3>فهرست معاملات (${displayed.length})</h3><div class="asset-table-wrap"><table class="phase4-table"><thead><tr><th>نماد / جزئیات</th><th>بازار / ورود</th><th>باقی‌مانده / کل</th><th>وضعیت / قیمت ورود</th><th>خالص تحقق‌یافته</th><th>تحقق‌نیافته</th><th>عملیات</th></tr></thead><tbody>${rows || '<tr><td colspan="7">معامله‌ای با این فیلتر ثبت نشده است.</td></tr>'}</tbody></table></div></section>`;
   }
 
   window.DaraPhase4UI = {

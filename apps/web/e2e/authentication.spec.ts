@@ -773,3 +773,126 @@ test("money management calculator computes risk, staged targets and transfers to
   await mm.getByLabel("حد ضرر").fill("98");
   await expect(page.locator(".mm-summary")).toContainText("معتبر");
 });
+
+test("transaction charts filter the ledger and accounts/reports render real data", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  const today = new Date();
+  const iso = (date) => date.toISOString().slice(0, 10);
+  const previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 15);
+  await page.addInitScript(
+    ({ current, previous }) => {
+      localStorage.setItem(
+        "dara.v2.preview",
+        JSON.stringify({
+          v: 3,
+          cur: "تومان",
+          accounts: [
+            { id: "a1", name: "نقد", type: "cash", opening: 1_000_000 },
+            { id: "a2", name: "بانک", type: "bank", opening: 2_000_000 },
+          ],
+          cats: [
+            { id: "c1", name: "خوراک", kind: "expense", emoji: "🍔" },
+            { id: "c2", name: "حقوق", kind: "income", emoji: "💰" },
+          ],
+          tx: [
+            { id: "t1", type: "expense", amount: 1_000_000, date: current, acc: "a1", to: null, cat: "c1", desc: "خرید امروز", note: "" },
+            { id: "t2", type: "income", amount: 5_000_000, date: current, acc: "a2", to: null, cat: "c2", desc: "حقوق", note: "" },
+            { id: "t3", type: "expense", amount: 2_000_000, date: previous, acc: "a2", to: null, cat: "c1", desc: "خرید ماه قبل", note: "" },
+          ],
+          budgets: { c1: 3_000_000 },
+          goals: [],
+          rec: [],
+        }),
+      );
+    },
+    { current: iso(today), previous: iso(previousMonth) },
+  );
+  await page.goto("/legacy/index.html?preview=1");
+  await page.locator(".drawer").getByRole("button", { name: "تراکنش‌ها" }).click();
+  await expect(page.locator('figure[data-chart-name="tx-cat"]')).toBeVisible();
+  await page.locator('[data-chart-name="tx-cat"] li[data-chart-key="c1"]').first().click();
+  await expect(page.locator(".flt select").nth(1)).toHaveValue("c1");
+  await expect(page.getByText("خرید امروز", { exact: true })).toBeVisible();
+  await expect(page.getByText("حقوق", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "پاک کردن همه" }).click();
+  await page.locator('[data-chart-name="tx-month"] [data-chart-key="-1"]').last().click();
+  await expect(page.getByText("خرید ماه قبل", { exact: true })).toBeVisible();
+
+  await page.locator(".drawer").getByRole("button", { name: "حساب‌ها" }).click();
+  await expect(page.getByRole("heading", { name: "حساب‌ها", exact: true })).toBeVisible();
+  await expect(page.locator('[data-chart-name="accounts-balance"]')).toBeVisible();
+  await expect(page.locator("table.data-table").first()).toContainText("نقد");
+
+  await page.locator(".drawer").getByRole("button", { name: "گزارش‌ها" }).click();
+  await expect(page.getByRole("heading", { name: "گزارش‌های مالی", exact: true })).toBeVisible();
+  await expect(page.locator('[data-chart-name="report-flow"]')).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "خروجی CSV" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toContain(".csv");
+});
+
+test("budget and goals pages expose their real charts", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.addInitScript(() => {
+    const iso = (date) => date.toISOString().slice(0, 10);
+    const now = new Date();
+    localStorage.setItem(
+      "dara.v2.preview",
+      JSON.stringify({
+        v: 3,
+        cur: "تومان",
+        accounts: [{ id: "a1", name: "نقد", type: "cash", opening: 0 }],
+        cats: [{ id: "c1", name: "خوراک", kind: "expense", emoji: "🍔" }],
+        tx: [{ id: "t1", type: "expense", amount: 2_000_000, date: iso(now), acc: "a1", to: null, cat: "c1", desc: "خرید", note: "" }],
+        budgets: { c1: 3_000_000 },
+        goals: [{ id: "g1", name: "سفر", description: "", emoji: "✈️", target: 10_000_000, date: "", start_date: iso(now), priority: 2, created_at: iso(now), contributions: [{ id: "s1", amount: 2_000_000, date: iso(now), note: "" }], plan: null, installments: [] }],
+        rec: [],
+      }),
+    );
+  });
+  await page.goto("/legacy/index.html?preview=1");
+  await page.locator(".drawer").getByRole("button", { name: "بودجه‌ها" }).click();
+  await expect(page.getByText("بودجه در برابر هزینه")).toBeVisible();
+  await expect(page.getByText("نزدیک به سقف")).toBeVisible();
+  await page.locator(".drawer").getByRole("button", { name: "اهداف" }).click();
+  await expect(page.getByText("هدف در برابر پس‌انداز")).toBeVisible();
+  await expect(page.getByText("روند پس‌انداز")).toBeVisible();
+});
+
+test("journal analytics charts are built from closed trades", async ({ page }) => {
+  await page.route("**/api/**", (route) => route.abort("failed"));
+  await page.addInitScript(() => {
+    const iso = (offset) => new Date(Date.now() - offset * 86_400_000).toISOString();
+    localStorage.setItem("dara.phase4.preview.v1", JSON.stringify({
+      version: 1,
+      wallets: [],
+      startingEquity: null,
+      accounts: [{ id: "pa1", name: "Bitunix", broker: "Bitunix", currency: "USD", initialBalance: "10000", createdAt: iso(10) }],
+      events: [{ id: "e1", accountId: "pa1", type: "deposit", amount: "1000", at: iso(9), note: "" }],
+      trades: [
+        {
+          id: "tr1", account: "Bitunix", accountId: "pa1", market: "crypto", symbol: "BTC", instrument: "derivative", direction: "long", currency: "USD",
+          entryDate: iso(5), entryPrice: "100", quantity: "2", leverage: "5", stopLoss: "95", takeProfit: "110", entryFee: "0", entryFeeRate: "0.06", strategy: "1 Touch", tags: [], notes: "",
+          closes: [{ id: "cl1", quantity: "2", exitPrice: "110", closedAt: iso(3), exitFee: "0.132", fundingCost: "0", entryFeeAllocated: "0.12", grossPnl: "20", netPnl: "19.748" }],
+          status: "closed", createdAt: iso(5),
+        },
+        {
+          id: "tr2", account: "Bitunix", accountId: "pa1", market: "crypto", symbol: "ETH", instrument: "derivative", direction: "short", currency: "USD",
+          entryDate: iso(8), entryPrice: "100", quantity: "1", leverage: "3", stopLoss: "103", takeProfit: "94", entryFee: "0", entryFeeRate: "0.06", strategy: "Reaction", tags: [], notes: "",
+          closes: [{ id: "cl2", quantity: "1", exitPrice: "97", closedAt: iso(6), exitFee: "0.0582", fundingCost: "0", entryFeeAllocated: "0.06", grossPnl: "3", netPnl: "2.8818" }],
+          status: "closed", createdAt: iso(8),
+        },
+      ],
+    }));
+  });
+  await page.goto("/legacy/index.html?preview=1");
+  await page.getByRole("button", { name: "ژورنال معاملات" }).click();
+  await expect(page.getByText("Equity Curve")).toBeVisible();
+  await expect(page.getByText("Long و Short")).toBeVisible();
+  await expect(page.getByText("توزیع R:R")).toBeVisible();
+  await expect(page.locator('[data-chart-name="journal-symbol"]')).toHaveCount(0);
+  await expect(page.locator("section.card.chart-card")).toHaveCount(6);
+});

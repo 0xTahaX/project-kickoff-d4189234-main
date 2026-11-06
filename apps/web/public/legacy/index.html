@@ -9,10 +9,14 @@
   </head>
   <body>
     <div class="app">
-      <nav id="nav" aria-label="ناوبری اصلی"></nav>
-      <main id="m" aria-live="polite">
-        <section class="card">در حال بارگذاری داشبورد…</section>
-      </main>
+      <nav id="nav" class="drawer" aria-label="ناوبری اصلی"></nav>
+      <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+      <div class="shell">
+        <header id="topbar" class="topbar"></header>
+        <main id="m" aria-live="polite">
+          <section class="card">در حال بارگذاری داشبورد…</section>
+        </main>
+      </div>
     </div>
     <dialog id="dlg"></dialog>
     <script>
@@ -148,12 +152,17 @@
                       "emoji-core.js",
                       () =>
                         loadScript(
-                          "assets-core.js",
+                          "charts-core.js",
+                          () =>
+                            loadScript(
+                              "assets-core.js",
                           () =>
                             loadScript("assets-ui.js", () =>
                               loadScript("markets-ui.js", loadPhase4, loadPhase4),
                             ),
-                          () => fail("بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید."),
+                              () => fail("بارگذاری ماژول دارایی‌ها ناموفق بود. اتصال و فایل‌های برنامه را بررسی کنید."),
+                            ),
+                          () => fail("بارگذاری هستهٔ نمودارها ناموفق بود. صفحه را دوباره باز کنید."),
                         ),
                       () => fail("بارگذاری هستهٔ ایموجی ناموفق بود. صفحه را دوباره باز کنید."),
                     ),

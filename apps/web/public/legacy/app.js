@@ -222,6 +222,85 @@ const persist = () => {
   }
   if (Cloud.status === "in") window.DARA_SYNC_WORKSPACE?.("dashboard", S);
 };
+
+// ─── تم روشن/تاریک، هدر و منوی همبرگری ──────────────────────────────────────
+const THEME_KEY = "dara.theme";
+const readTheme = () => {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "dark" || saved === "light") return saved;
+  } catch {}
+  return "light";
+};
+const applyTheme = (theme) => {
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {}
+};
+const initialTheme = readTheme();
+applyTheme(initialTheme);
+
+const PAGE_ICONS = {
+  dash: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  tx: '<path d="M4 7h16M4 12h10M4 17h16"/><path d="M17 15l3 2-3 2"/>',
+  accounts: '<path d="M3 7h15a3 3 0 0 1 3 3v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2z"/><path d="M3 7V6a2 2 0 0 1 2-2h11"/><path d="M16 13h2"/>',
+  reports: '<path d="M6 3h9l4 4v14H6z"/><path d="M9 12h6M9 16h6M9 8h3"/>',  bud: '<path d="M4 5h16v14H4z"/><path d="M8 5v14M4 10h4M4 14h4"/>',
+  goals: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 4v2M20 12h-2"/>',
+  assets: '<path d="M4 8l8-4 8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/>',
+  net: '<path d="M4 19V5M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/>',
+  portfolio: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
+  markets: '<path d="M4 17l5-5 4 3 7-9"/><path d="M15 6h5v5"/>',
+  blockchain: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/><path d="M11 7h4v6M7 11v4h6"/>',
+  journal: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+  notifications: '<path d="M6 9a6 6 0 1 1 12 0c0 4 2 5 2 5H4s2-1 2-5"/><path d="M10 20h4"/>',
+  rec: '<path d="M4 11a8 8 0 0 1 14-5l2 2M20 13a8 8 0 0 1-14 5l-2-2"/><path d="M20 4v4h-4M4 20v-4h4"/>',
+  ai: '<path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M19 15l1 2 2 1-2 1-1 2-1-2-2-1 2-1z"/>',
+  set: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+};
+const navIcon = (key) =>
+  `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PAGE_ICONS[key] || PAGE_ICONS.dash}</svg>`;
+
+const NAV_GROUPS = [
+  { title: "نمای کلی", items: [["dash", "داشبورد"]] },
+  {
+    title: "مدیریت مالی",
+    items: [
+      ["tx", "تراکنش‌ها"],
+      ["accounts", "حساب‌ها"],
+      ["bud", "بودجه‌ها"],
+      ["goals", "اهداف"],
+    ],
+  },
+  {
+    title: "دارایی و تحلیل",
+    items: [
+      ["reports", "گزارش‌ها"],
+      ["assets", "دارایی‌ها"],
+      ["net", "ارزش خالص"],
+      ["portfolio", "سرمایه‌گذاری"],
+      ["markets", "بازارها"],
+      ["blockchain", "بلاک‌چین"],
+    ],
+  },
+  {
+    title: "معاملات",
+    items: [
+      ["journal", "ژورنال معاملات"],
+      ["notifications", "یادآورها"],
+      ["rec", "تکرارشونده"],
+    ],
+  },
+  {
+    title: "ابزارها",
+    items: [
+      ["ai", "دستیار"],
+      ["set", "تنظیمات"],
+    ],
+  },
+];
+const NAV = NAV_GROUPS.flatMap((group) => group.items);
+const PAGE_TITLES = Object.fromEntries(NAV);
 let ui = {
   page: "dash",
   off: 0,
@@ -229,6 +308,8 @@ let ui = {
   chat: [],
   q: "",
   flash: "",
+  theme: initialTheme,
+  navOpen: window.innerWidth >= 1024,
   ft: "",
   fc: "",
   fa: "",
@@ -649,12 +730,62 @@ const A = {
   },
   nav: (p) => {
     ui.page = p;
+    if (window.innerWidth < 1024) ui.navOpen = false;
     R();
     scrollTo(0, 0);
+  },
+  toggleNav: () => {
+    ui.navOpen = !ui.navOpen;
+    document.body.classList.toggle("nav-open", ui.navOpen);
+    const backdrop = $("drawerBackdrop");
+    if (backdrop) backdrop.hidden = !ui.navOpen || window.innerWidth >= 1024;
+    const button = document.querySelector("[data-menu-button]");
+    if (button) button.setAttribute("aria-expanded", String(ui.navOpen));
+  },
+  theme: () => {
+    ui.theme = ui.theme === "dark" ? "light" : "dark";
+    applyTheme(ui.theme);
+    R();
   },
   sh: (k) => {
     ui.off = k ? ui.off + k : 0;
     R();
+  },
+
+  reportCsv: () => {
+    const state = ui.report;
+    if (!state) return;
+    const rows = [["تاریخ", "نوع", "دسته", "حساب", "مبلغ", "توضیح", "یادداشت"]];
+    S.tx
+      .filter(
+        (entry) =>
+          entry.date >= state.from &&
+          entry.date <= state.to &&
+          (!state.acc || entry.acc === state.acc || entry.to === state.acc) &&
+          (!state.cat || entry.cat === state.cat),
+      )
+      .sort((left, right) => (left.date < right.date ? -1 : 1))
+      .forEach((entry) => {
+        rows.push([
+          entry.date,
+          entry.type === "income" ? "درآمد" : entry.type === "expense" ? "هزینه" : "انتقال",
+          entry.cat ? cn(entry.cat) : "",
+          an(entry.acc),
+          String(entry.amount),
+          entry.desc || "",
+          entry.note || "",
+        ]);
+      });
+    const csv =
+      "\uFEFF" +
+      rows
+        .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+        .join("\r\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    link.download = `dara-report-${state.from}-to-${state.to}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   },
   tx: (id) => openTransactionDialog(id),
   dtx: (id) => {
@@ -1721,86 +1852,221 @@ const fcHtml = () => {
 };
 const pages = {
   dash() {
-    const { r } = per(),
-      tx = S.tx.filter((t) => inR(t, r)),
-      T = totals(tx),
-      bc = byCat(tx),
-      bl = balances(S),
-      cs = Object.entries(bc).sort((a, b) => b[1] - a[1]),
-      mx = cs[0] ? cs[0][1] : 1;
-    const ins = [];
-    if (cs[0])
-      ins.push(
-        `بیشترین هزینه شما «${E(cn(cs[0][0]))}» است (${M(cs[0][1])}، ${nf.format(Math.round((cs[0][1] / T.e) * 100))}٪ از هزینه‌ها).`,
-      );
-    if (T.i > 0)
-      ins.push(
-        `نرخ پس‌انداز این ماه: ${nf.format(Math.round((T.n / T.i) * 100))}٪ از درآمد ثبت‌شده.`,
-      );
-    Object.entries(S.budgets).forEach(([c, l]) => {
-      if ((bc[c] || 0) > l)
-        ins.push(`بودجه «${E(cn(c))}» ${M(bc[c] - l)} بیشتر شده است.`);
+    const { r } = per();
+    const tx = S.tx.filter((entry) => inR(entry, r));
+    const totalsNow = totals(tx);
+    const previous = totals(S.tx.filter((entry) => inR(entry, range(shift(today(), ui.off - 1)))));
+    const balancesNow = balances(S);
+    const cash = sum(balancesNow);
+    const byCategory = byCat(tx);
+    const categories = Object.entries(byCategory).sort((left, right) => right[1] - left[1]);
+    const change = (current, prior, goodWhenUp = true) => {
+      if (!prior) return "";
+      const percent = Math.round(((current - prior) / Math.abs(prior)) * 100);
+      if (!percent) return "<span class=\"delta\">بدون تغییر</span>";
+      const good = percent > 0 ? goodWhenUp : !goodWhenUp;
+      return `<span class="delta ${good ? "good" : "bad"}">${percent > 0 ? "▲" : "▼"} ${faNum(Math.abs(percent))}٪ نسبت به ماه قبل</span>`;
+    };
+    const cards = [
+      ["مجموع موجودی حساب‌ها", M(cash), "assets", "", "موجودی نقدی همهٔ حساب‌ها"],
+      ["درآمد این ماه", M(totalsNow.i), "net", "pos", change(totalsNow.i, previous.i)],
+      ["هزینه این ماه", M(totalsNow.e), "tx", "neg", change(totalsNow.e, previous.e, false)],
+      ["جریان نقدی خالص", M(totalsNow.n), "goals", totalsNow.n >= 0 ? "pos" : "neg", change(totalsNow.n, previous.n)],
+    ];
+    const kpis = cards
+      .map(
+        ([label, value, icon, tone, hint]) => `<article class="card kpi-card"><span class="kpi-icon">${navIcon(icon)}</span><div><small>${label}</small><b class="${tone}">${value}</b>${hint ? `<p class="kpi-hint">${hint}</p>` : ""}</div></article>`,
+      )
+      .join("");
+    const months = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const base = shift(today(), ui.off - offset);
+      const monthTotals = totals(S.tx.filter((entry) => inR(entry, range(base))));
+      months.push({ label: fmn(base), income: monthTotals.i, expense: monthTotals.e });
+    }
+    const flowChart = DaraCharts.bar({
+      labels: months.map((month) => month.label),
+      series: [
+        { name: "درآمد", values: months.map((month) => month.income), color: "var(--g)" },
+        { name: "هزینه", values: months.map((month) => month.expense), color: "var(--r)" },
+      ],
+      format: (value) => faNum(Math.round(value)),
+      ariaLabel: "نمودار جریان نقدی شش ماه اخیر",
     });
-    return (
-      pnav() +
-      `<div class=g>${kpi("موجودی کل حساب‌ها", M(sum(bl)))}${kpi("درآمد", M(T.i), "pos")}${kpi("هزینه", M(T.e), "neg")}${kpi("جریان نقدی خالص", M(T.n), T.n >= 0 ? "pos" : "neg")}</div><div class=g>${card("هزینه به تفکیک دسته", cs.map(([c, v]) => `<div class=row style="border:0;padding:2px 0"><span>${E(catText(c))}</span><small>${M(v)}</small></div>${bar((v / mx) * 100)}`).join("") || none("در این ماه هزینه‌ای ثبت نشده است."))}${card("بودجه‌ها", budRows(bc))}${card("اهداف پس‌انداز", S.goals.map(goalSummaryRow).join("") || none("هنوز هدفی نساخته‌اید."))}${card("سررسیدهای پیش‌رو", `<ul>${recUp()}</ul>`)}</div>${card("بینش‌ها", ins.length ? `<ul>${ins.map((i) => `<li class=row>${i}</li>`).join("")}</ul>` : none("با ثبت چند تراکنش، بینش‌ها اینجا ظاهر می‌شوند."))}${ui.off === 0 ? fcHtml() : ""}${card(
-        "آخرین تراکنش‌ها",
-        `<ul>${
-          S.tx
-            .slice()
-            .sort((a, b) => (a.date < b.date ? 1 : -1))
-            .slice(0, 5)
-            .map(txRow)
-            .join("") || none("تراکنشی ثبت نشده است.")
-        }</ul>`,
-      )}`
-    );
-  },
-  tx() {
-    const { r } = per(),
-      q = ui.q.trim();
-    const l = S.tx
-        .filter(
-          (t) =>
-            inR(t, r) &&
-            (!ui.ft || t.type === ui.ft) &&
-            (!ui.fc || t.cat === ui.fc) &&
-            (!ui.fa || t.acc === ui.fa || t.to === ui.fa) &&
-            (!q || (t.desc + " " + t.note).includes(q)),
-        )
-        .sort((a, b) => (a.date < b.date ? 1 : -1)),
-      T = totals(l),
-      so = (k, o) =>
-        `<select onchange="ui.${k}=this.value;R()"><option value="">همه</option>${o.map((x) => `<option value="${E(x[0])}"${ui[k] === x[0] ? " selected" : ""}>${E(x[1])}</option>`).join("")}</select>`;
-    return (
-      pnav() +
-      `<div class=top><h2 style="margin:0">تراکنش‌ها</h2><button class=pri onclick="A.tx()">+ تراکنش جدید</button></div><div class=flt><input placeholder="جستجو…" value="${E(ui.q)}" onchange="ui.q=this.value;R()">${so(
-        "ft",
-        [
-          ["expense", "هزینه"],
-          ["income", "درآمد"],
-          ["transfer", "انتقال"],
-        ],
-      )}${so("fc", catO())}${so("fa", accO())}</div>${card("جمع نتایج فیلتر‌شده", `درآمد <b class=pos>${M(T.i)}</b> · هزینه <b class=neg>${M(T.e)}</b> · خالص <b>${M(T.n)}</b> <small>(انتقال‌ها در جمع‌ها نیستند)</small>`)}<section class=card><ul>${l.map(txRow).join("") || none("تراکنشی با این فیلترها پیدا نشد.")}</ul></section>`
-    );
+    const palette = ["#4f6bed", "#0ea5a4", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981", "#f97316", "#64748b"];
+    const donutItems = categories.slice(0, 6).map(([id, value], index) => ({
+      label: cn(id),
+      value,
+      display: M(value),
+      color: palette[index % palette.length],
+    }));
+    const other = categories.slice(6).reduce((total, [, value]) => total + value, 0);
+    if (other) donutItems.push({ label: "سایر", value: other, display: M(other), color: "#94a3b8" });
+    const donutChart = categories.length
+      ? DaraCharts.donut({ items: donutItems, title: "هزینه" })
+      : DaraCharts.empty("در این ماه هزینه‌ای ثبت نشده است.");
+    const recent = S.tx
+      .slice()
+      .sort((left, right) => (left.date < right.date ? 1 : -1))
+      .slice(0, 6)
+      .map(
+        (entry) => `<tr><td><b>${E(entry.desc || (entry.cat ? cn(entry.cat) : "—"))}</b><small>${entry.cat ? E(catText(entry.cat)) : "بدون دسته"}</small></td><td>${E(an(entry.acc))}</td><td>${fd(entry.date)}</td><td><span class="badge badge-${entry.type}">${entry.type === "income" ? "درآمد" : entry.type === "transfer" ? "انتقال" : "هزینه"}</span></td><td class="${entry.type === "income" ? "pos" : entry.type === "expense" ? "neg" : ""}">${entry.type === "transfer" ? M(entry.amount) : `${entry.type === "income" ? "+" : "−"}${M(entry.amount)}`}</td></tr>`,
+      )
+      .join("");
+    const goals = S.goals.slice(0, 4).map(goalSummaryRow).join("");
+    const insights = [];
+    if (categories[0])
+      insights.push(`بیشترین هزینهٔ این ماه «${cn(categories[0][0])}» با ${M(categories[0][1])} است.`);
+    if (totalsNow.i > 0)
+      insights.push(`نرخ پس‌انداز این ماه ${faNum(Math.round((totalsNow.n / totalsNow.i) * 100))}٪ از درآمد ثبت‌شده است.`);
+    if (tx.length) {
+      const day = Math.max(1, new Date(today()).getUTCDate());
+      insights.push(`میانگین هزینهٔ روزانه ${M(Math.round(totalsNow.e / day))} است.`);
+    }
+    Object.entries(S.budgets).forEach(([categoryId, limit]) => {
+      if ((byCategory[categoryId] || 0) > limit)
+        insights.push(`بودجهٔ «${cn(categoryId)}» ${M(byCategory[categoryId] - limit)} بیشتر شده است.`);
+    });
+    const firstUse = !S.tx.length && !S.goals.length;
+    const monthNav = `<div class="page-toolbar"><div class="segmented"><button class="btn btn-ghost" type="button" onclick="A.sh(-1)" aria-label="ماه قبل">›</button><span>${fmn(per().b)}</span><button class="btn btn-ghost" type="button" onclick="A.sh(1)" aria-label="ماه بعد">‹</button>${ui.off ? '<button class="btn btn-ghost" type="button" onclick="A.sh(0)">این ماه</button>' : ""}</div><span class="toolbar-hint">${faNum(tx.length)} تراکنش در این ماه</span></div>`;
+    return `${monthNav}
+      <div class="kpi-grid">${kpis}</div>
+      ${
+        firstUse
+          ? `<section class="card onboarding"><h3>به دارا خوش آمدید</h3><p class="mu">اولین تراکنش یا هدف مالی‌تان را ثبت کنید تا داشبورد از دادهٔ واقعی شما ساخته شود.</p><div class="onboarding-actions"><button class="btn btn-primary" type="button" onclick="A.tx()">+ ثبت اولین تراکنش</button><button class="btn btn-ghost" type="button" onclick="A.goal()">+ ساخت هدف</button></div></section>`
+          : ""
+      }
+      <div class="dash-grid">
+        <section class="card chart-card wide"><header class="card-head"><div><h3>جریان نقدی</h3><small>درآمد در برابر هزینه · شش ماه اخیر</small></div></header>${flowChart}</section>
+        <section class="card chart-card"><header class="card-head"><div><h3>ترکیب هزینه‌ها</h3><small>${fmn(per().b)}</small></div></header>${donutChart}</section>
+      </div>
+      <div class="dash-grid">
+        <section class="card"><header class="card-head"><div><h3>اهداف پس‌انداز</h3><small>پیشرفت پس‌انداز</small></div><button class="btn btn-ghost" type="button" onclick="A.nav('goals')">مشاهدهٔ همه</button></header>${goals || `<p class="mu">هنوز هدفی نساخته‌اید. <button class="link-btn" type="button" onclick="A.goal()">ساخت هدف</button></p>`}</section>
+        <section class="card"><header class="card-head"><div><h3>بینش‌های سریع</h3><small>بر پایهٔ دادهٔ همین ماه</small></div></header>${insights.length ? `<ul class="insight-list">${insights.map((item) => `<li>${E(item)}</li>`).join("")}</ul>` : '<p class="mu">با ثبت چند تراکنش، بینش‌ها اینجا ظاهر می‌شوند.</p>'}<div class="insight-actions"><button class="btn btn-ghost" type="button" onclick="A.nav('bud')">بودجه‌ها</button><button class="btn btn-ghost" type="button" onclick="A.nav('tx')">فهرست کامل</button></div></section>
+      </div>
+      <section class="card"><header class="card-head"><div><h3>تراکنش‌های اخیر</h3><small>آخرین فعالیت‌های ثبت‌شده</small></div><button class="btn btn-primary" type="button" onclick="A.tx()">+ تراکنش</button></header>${recent ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>عنوان</th><th>حساب</th><th>تاریخ</th><th>نوع</th><th>مبلغ (${S.cur})</th></tr></thead><tbody>${recent}</tbody></table></div>` : '<p class="mu">هنوز تراکنشی ثبت نشده است.</p>'}</section>
+      <div class="dash-grid">
+        <section class="card"><header class="card-head"><div><h3>بودجه‌ها</h3><small>مصرف این ماه</small></div></header>${budRows(byCategory)}</section>
+        <section class="card"><header class="card-head"><div><h3>سررسیدهای پیش‌رو</h3><small>۳۰ روز آینده</small></div></header><ul class="plain-list">${recUp()}</ul></section>
+      </div>
+      ${ui.off === 0 ? fcHtml() : ""}`;
+  },  tx() {
+    const { r } = per();
+    const query = ui.q.trim();
+    const list = S.tx
+      .filter(
+        (entry) =>
+          inR(entry, r) &&
+          (!ui.ft || entry.type === ui.ft) &&
+          (!ui.fc || entry.cat === ui.fc) &&
+          (!ui.fa || entry.acc === ui.fa || entry.to === ui.fa) &&
+          (!query || (entry.desc + " " + entry.note).includes(query)),
+      )
+      .sort((left, right) => (left.date < right.date ? 1 : -1));
+    const summary = totals(list);
+    const select = (key, options) =>
+      `<select onchange="ui.${key}=this.value;R()"><option value="">همه</option>${options.map(([value, label]) => `<option value="${E(value)}"${ui[key] === value ? " selected" : ""}>${E(label)}</option>`).join("")}</select>`;
+    const months = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const base = shift(today(), ui.off - offset);
+      const subset = S.tx.filter((entry) => inR(entry, range(base)));
+      months.push({ label: fmn(base), count: subset.length, ...totals(subset), offset: ui.off - offset });
+    }
+    const flow = DaraCharts.bar({
+      labels: months.map((month) => month.label),
+      series: [{ name: "درآمد", values: months.map((month) => month.i), color: "var(--g)" }, { name: "هزینه", values: months.map((month) => month.e), color: "var(--r)" }],
+      format: (value) => faNum(Math.round(value)),
+      meta: months.map((month) => String(month.offset)),
+      name: "tx-month",
+      ariaLabel: "روند درآمد و هزینه با امکان انتخاب ماه",
+    });
+    const counts = DaraCharts.line({
+      labels: months.map((month) => month.label),
+      values: months.map((month) => month.count),
+      format: (value) => faNum(value),
+      ariaLabel: "تعداد تراکنش‌ها در ماه",
+    });
+    const palette = ["#4f6bed", "#0ea5a4", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981", "#f97316", "#64748b"];
+    const categories = Object.entries(byCat(list)).sort((left, right) => right[1] - left[1]);
+    const donut = categories.length
+      ? DaraCharts.donut({
+          items: categories.slice(0, 8).map(([id, value], index) => ({ label: cn(id), value, display: M(value), color: palette[index % palette.length], key: id })),
+          title: "هزینه",
+          name: "tx-cat",
+        })
+      : DaraCharts.empty("با این فیلترها هزینه‌ای وجود ندارد.");
+    const chips = [
+      ui.ft ? `<button class="chip" type="button" onclick="ui.ft='';R()">نوع: ${ui.ft === "income" ? "درآمد" : ui.ft === "transfer" ? "انتقال" : "هزینه"} ✕</button>` : "",
+      ui.fc ? `<button class="chip" type="button" onclick="ui.fc='';R()">دسته: ${E(cn(ui.fc))} ✕</button>` : "",
+      ui.fa ? `<button class="chip" type="button" onclick="ui.fa='';R()">حساب: ${E(an(ui.fa))} ✕</button>` : "",
+      ui.q.trim() ? `<button class="chip" type="button" onclick="ui.q='';R()">جستجو: ${E(ui.q)} ✕</button>` : "",
+    ].filter(Boolean).join("");
+    return `${pnav()}
+      <div class="top"><h2>تراکنش‌ها</h2><button class="pri" type="button" onclick="A.tx()">+ تراکنش جدید</button></div>
+      <div class="flt">
+        <input placeholder="جستجو…" value="${E(ui.q)}" onchange="ui.q=this.value;R()">
+        ${select("ft", [["expense", "هزینه"], ["income", "درآمد"], ["transfer", "انتقال"]])}
+        ${select("fc", catO())}
+        ${select("fa", accO())}
+      </div>
+      ${chips ? `<div class="filter-chips">${chips}<button class="chip chip-clear" type="button" onclick="ui.ft='';ui.fc='';ui.fa='';ui.q='';R()">پاک کردن همه</button></div>` : ""}
+      ${card("جمع نتایج فیلترشده", `درآمد <b class="pos">${M(summary.i)}</b> · هزینه <b class="neg">${M(summary.e)}</b> · خالص <b>${M(summary.n)}</b> <small>(انتقال‌ها در جمع‌ها نیستند)</small>`)}
+      <div class="dash-grid">
+        <section class="card chart-card wide"><header class="card-head"><div><h3>روند درآمد و هزینه</h3><small>شش ماه اخیر · برای فیلتر ماه روی ستون کلیک کنید</small></div></header>${flow}</section>
+        <section class="card chart-card"><header class="card-head"><div><h3>تفکیک هزینه‌ها</h3><small>برای فیلتر دسته روی بخش کلیک کنید</small></div></header>${donut}</section>
+      </div>
+      <div class="dash-grid">
+        <section class="card chart-card"><header class="card-head"><div><h3>تعداد تراکنش‌ها</h3><small>روند شش‌ماهه</small></div></header>${counts}</section>
+        <section class="card"><header class="card-head"><div><h3>راهنمای نمودارها</h3><small>تعامل سریع</small></div></header><ul class="insight-list"><li>ستون‌های ماه: همان ماه در فهرست پایین نمایش داده می‌شود.</li><li>بخش‌های Donut: دستهٔ هزینه را فیلتر می‌کند.</li><li>انتقال بین حساب‌ها در درآمد/هزینه شمرده نمی‌شود.</li></ul></section>
+      </div>
+      <section class="card"><header class="card-head"><div><h3>فهرست تراکنش‌ها</h3><small>${faNum(list.length)} نتیجه</small></div></header><ul>${list.map(txRow).join("") || '<p class="mu">تراکنشی با این فیلترها پیدا نشد.</p>'}</ul></section>`;
   },
   bud() {
-    const { r } = per(),
-      bc = byCat(S.tx.filter((t) => inR(t, r)));
-    return (
-      pnav() +
-      card(
-        "سقف ماهانه هر دسته (خالی = بدون بودجه)",
-        S.cats
-          .filter((c) => c.kind === "expense")
-          .map(
-            (c) =>
-              `<label>${E(categoryEmoji(c))} ${E(c.name)}<input inputmode=numeric data-money value="${S.budgets[c.id] ? DaraGoals.formatMoney(S.budgets[c.id]) : ""}" placeholder="سقف به ${S.cur}" onchange="A.bud('${c.id}',this.value)"></label>`,
-          )
-          .join(""),
-      ) +
-      card("وضعیت این ماه", budRows(bc))
-    );
+    const { r } = per();
+    const spentByCategory = byCat(S.tx.filter((entry) => inR(entry, r)));
+    const budgetIds = Object.keys(S.budgets).filter((id) => S.cats.some((category) => category.id === id));
+    const palette = ["#4f6bed", "#0ea5a4", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981"];
+    const budgetChart = budgetIds.length
+      ? DaraCharts.bar({
+          labels: budgetIds.map((id) => cn(id)),
+          series: [{ name: "بودجه", values: budgetIds.map((id) => S.budgets[id]), color: "var(--pri)" }, { name: "هزینه", values: budgetIds.map((id) => spentByCategory[id] || 0), color: "var(--r)" }],
+          format: (value) => faNum(Math.round(value)),
+          ariaLabel: "بودجه در برابر هزینهٔ واقعی",
+        })
+      : DaraCharts.empty("هنوز بودجه‌ای تعیین نشده است.");
+    const monthSpend = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const base = shift(today(), ui.off - offset);
+      monthSpend.push({ label: fmn(base), value: totals(S.tx.filter((entry) => inR(entry, range(base)))).e });
+    }
+    const spendLine = DaraCharts.line({
+      labels: monthSpend.map((month) => month.label),
+      values: monthSpend.map((month) => month.value),
+      format: (value) => faNum(Math.round(value)),
+      ariaLabel: "روند هزینهٔ شش ماه",
+    });
+    const nearLimit = budgetIds
+      .map((id) => {
+        const spent = spentByCategory[id] || 0;
+        const limit = S.budgets[id];
+        return { id, spent, limit, percent: limit ? Math.round((spent / limit) * 100) : 0, left: limit - spent };
+      })
+      .filter((item) => item.percent >= 80);
+    const rows = budgetIds
+      .map((id) => {
+        const spent = spentByCategory[id] || 0;
+        const limit = S.budgets[id];
+        const percent = limit ? Math.round((spent / limit) * 100) : 0;
+        const left = limit - spent;
+        const status = percent > 100 ? `<span class="badge badge-expense">بیش از سقف</span>` : percent >= 80 ? `<span class="badge" style="background:var(--warn-soft);color:var(--warn)">نزدیک سقف</span>` : `<span class="badge badge-income">در محدوده</span>`;
+        return `<tr><td><b>${E(catText(id))}</b></td><td>${M(limit)}</td><td>${M(spent)}</td><td>${left >= 0 ? M(left) : "−" + M(-left)}</td><td>${faNum(percent)}٪</td><td>${status}</td></tr>`;
+      })
+      .join("");
+    return `${pnav()}
+      <div class="top"><h2>بودجه‌بندی</h2><button class="pri" type="button" onclick="A.nav('tx')">مشاهدهٔ تراکنش‌ها</button></div>
+      <section class="card"><header class="card-head"><div><h3>سقف ماهانه هر دسته</h3><small>خالی = بدون بودجه · با ثبت، فوراً ذخیره می‌شود</small></div></header>${S.cats.filter((category) => category.kind === "expense").map((category) => `<label class="budget-input">${E(categoryEmoji(category))} ${E(category.name)}<input inputmode="numeric" data-money value="${S.budgets[category.id] ? DaraGoals.formatMoney(S.budgets[category.id]) : ""}" placeholder="سقف به ${S.cur}" onchange="A.bud('${category.id}',this.value)"></label>`).join("")}</section>
+      <div class="dash-grid"><section class="card chart-card wide"><header class="card-head"><div><h3>بودجه در برابر هزینه</h3><small>${fmn(per().b)}</small></div></header>${budgetChart}</section><section class="card"><header class="card-head"><div><h3>نزدیک به سقف</h3><small>۸۰٪ به بالا</small></div></header>${nearLimit.length ? `<ul class="insight-list">${nearLimit.map((item) => `<li>${E(catText(item.id))}: ${faNum(item.percent)}٪${item.left < 0 ? ` · ${M(-item.left)} بیش از سقف` : ` · ${M(item.left)} باقی`}</li>`).join("")}</ul>` : '<p class="mu">همهٔ دسته‌ها در محدودهٔ امن هستند.</p>'}<button class="btn btn-ghost" type="button" onclick="A.nav('tx')">ثبت هزینه</button></section></div>
+      <div class="dash-grid"><section class="card chart-card wide"><header class="card-head"><div><h3>روند هزینه</h3><small>شش ماه اخیر (بودجه‌های تاریخی ذخیره نمی‌شوند)</small></div></header>${spendLine}</section><section class="card"><header class="card-head"><div><h3>وضعیت دسته‌ها</h3><small>مصرف بودجه</small></div></header><div class="table-wrap"><table class="data-table"><thead><tr><th>دسته</th><th>بودجه</th><th>هزینه</th><th>باقی‌مانده</th><th>درصد</th><th>وضعیت</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="mu">بودجه‌ای تعیین نشده است.</td></tr>'}</tbody></table></div></section></div>`;
   },
   goals() {
     const help = `<details class="goal-help"><summary>سهم ماهانه چگونه محاسبه می‌شود؟</summary><p>سهم ماهانه = مانده ÷ تعداد ماه‌های شمسی تا تاریخ هدف (حداقل ۱)، بدون سود و تورم. مبلغ هدف مستقل از موجودی حساب‌هاست و ثبت پس‌انداز، تراکنش درآمد یا هزینه نمی‌سازد.</p></details>`;
@@ -1813,10 +2079,154 @@ const pages = {
     const stats = S.goals.length
       ? `<div class="goal-stats"><span>${M(totalSaved)} پس‌انداز شده</span><span>${faNum(active)} هدف فعال</span><span>${faNum(completed)} تکمیل‌شده</span></div>`
       : "";
-    return `<div class="top"><h2 style="margin:0">اهداف پس‌انداز</h2><button class="pri" onclick="A.goal()">+ هدف جدید</button></div>${stats}${help}${S.goals.length ? S.goals.map(goalCard).join("") : goalsEmpty()}`;
+    const topGoals = S.goals.filter((goal) => DaraGoals.progressOf(goal)).slice(0, 6);
+    const compare = topGoals.length
+      ? DaraCharts.bar({
+          labels: topGoals.map((goal) => goal.name),
+          series: [{ name: "مبلغ هدف", values: topGoals.map((goal) => goal.target), color: "var(--pri)" }, { name: "پس‌اندازشده", values: topGoals.map((goal) => DaraGoals.savedOf(goal)), color: "var(--g)" }],
+          format: (value) => faNum(Math.round(value)),
+          ariaLabel: "مقایسهٔ مبلغ هدف و پس‌انداز",
+        })
+      : DaraCharts.empty("برای مقایسه، حداقل یک هدف معتبر لازم است.");
+    const allContributions = S.goals
+      .flatMap((goal) => (goal.contributions || []).filter((contribution) => !contribution.invalid && contribution.date))
+      .sort((left, right) => (left.date < right.date ? -1 : 1));
+    const months = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const span = range(shift(today(), ui.off - offset));
+      const cumulative = allContributions.filter((contribution) => contribution.date <= span.e).reduce((sum, contribution) => sum + contribution.amount, 0);
+      months.push({ label: fmn(span.s), value: cumulative });
+    }
+    const trend = allContributions.length
+      ? DaraCharts.line({ labels: months.map((month) => month.label), values: months.map((month) => month.value), format: (value) => faNum(Math.round(value)), ariaLabel: "روند تجمعی پس‌انداز" })
+      : DaraCharts.empty("هنوز مشارکت پس‌اندازی ثبت نشده است.");
+    const planCounts = { active: 0, paused: 0, completed: 0, late: 0 };
+    S.goals.forEach((goal) => {
+      if (!goal.plan) return;
+      planCounts[goal.plan.status] = (planCounts[goal.plan.status] || 0) + 1;
+      const summary = DaraGoals.planSummary(goal, today());
+      if (summary) planCounts.late += summary.counts.late;
+    });
+    const statusChips = `<div class="filter-chips"><span class="chip">فعال: ${faNum(planCounts.active)}</span><span class="chip">متوقف: ${faNum(planCounts.paused)}</span><span class="chip">تکمیل‌شده: ${faNum(planCounts.completed)}</span><span class="chip">دورهٔ تأخیردار: ${faNum(planCounts.late)}</span></div>`;
+    return `<div class="top"><h2>اهداف پس‌انداز</h2><button class="pri" onclick="A.goal()">+ هدف جدید</button></div>
+      ${stats}${help}
+      <div class="dash-grid">
+        <section class="card chart-card wide"><header class="card-head"><div><h3>هدف در برابر پس‌انداز</h3><small>مقایسهٔ مبلغ هدف و موجودی فعلی</small></div></header>${compare}</section>
+        <section class="card chart-card"><header class="card-head"><div><h3>روند پس‌انداز</h3><small>تجمعی شش ماه</small></div></header>${trend}</section>
+      </div>
+      <section class="card"><header class="card-head"><div><h3>وضعیت برنامه‌های پس‌انداز</h3><small>روزانه/هفتگی/ماهانه</small></div></header>${statusChips}<small class="mu">دوره‌های تأخیردار از برنامه‌های فعال محاسبه می‌شوند و دوره‌های آینده تأخیر محسوب نمی‌شوند.</small></section>
+      ${S.goals.length ? S.goals.map(goalCard).join("") : goalsEmpty()}`;
   },
   rec() {
     return `<div class=top><h2 style="margin:0">تراکنش‌های تکرارشونده</h2><button class=pri onclick="A.rec()">+ قانون جدید</button></div><section class=card><ul>${S.rec.map((r) => `<li class=row><div><b>${E(r.name)}</b><small>${r.freq === "weekly" ? "هفتگی" : "ماهانه"} · بعدی: ${fd(r.next)}${r.next <= today() ? " · سررسید شده" : ""}</small></div><span class="${r.type === "income" ? "pos" : "neg"}">${M(r.amount)}</span><span><button class=b onclick="A.post('${r.id}')">ثبت تراکنش</button> <button class=b onclick="A.dr('${r.id}')">حذف</button></span></li>`).join("") || none("قانونی ثبت نشده است.")}</ul></section><small>تراکنشی به‌طور خودکار ساخته نمی‌شود: با «ثبت تراکنش» یک تراکنش ساخته و سررسید بعدی یک دوره جلو می‌رود، پس تکرار دوباره‌ای رخ نمی‌دهد.</small>`;
+  },
+
+  accounts() {
+    const balancesNow = balances(S);
+    const total = sum(balancesNow);
+    const palette = ["#4f6bed", "#0ea5a4", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981"];
+    const accountRows = S.accounts.map((account) => {
+      const balance = balancesNow[account.id] || 0;
+      const related = S.tx.filter((entry) => entry.acc === account.id || entry.to === account.id);
+      const last = related.reduce((latest, entry) => (latest == null || entry.date > latest ? entry.date : latest), null);
+      const type = account.type === "bank" ? "بانکی" : account.type === "savings" ? "پس‌انداز" : "نقدی";
+      return `<tr><td><b>${E(account.name)}</b><small>${type}${account.emoji ? " " + E(account.emoji) : ""}</small></td><td>${M(balance)} ${E(S.cur)}</td><td>${total ? faNum(Math.round((balance / total) * 100)) : "۰"}٪</td><td>${faNum(related.length)}</td><td>${last ? fd(last) : "بدون فعالیت"}</td></tr>`;
+    }).join("");
+    const items = S.accounts.map((account, index) => ({
+      label: account.name,
+      value: Math.max(0, balancesNow[account.id] || 0),
+      display: M(balancesNow[account.id] || 0),
+      color: palette[index % palette.length],
+      key: account.id,
+    }));
+    const share = S.accounts.length
+      ? DaraCharts.donut({ items, title: "سهم حساب‌ها", name: "accounts-share" })
+      : DaraCharts.empty("حسابی ثبت نشده است.");
+    const comparison = S.accounts.length
+      ? DaraCharts.bar({
+          labels: S.accounts.map((account) => account.name),
+          series: [{ name: "موجودی", values: S.accounts.map((account) => balancesNow[account.id] || 0), color: "var(--pri)" }],
+          format: (value) => faNum(Math.round(value)),
+          name: "accounts-balance",
+          ariaLabel: "مقایسهٔ موجودی حساب‌ها",
+        })
+      : DaraCharts.empty("حسابی ثبت نشده است.");
+    const shortDate = (iso) => new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(iso + "T00:00:00Z"));
+    const histories = S.accounts.slice(0, 3).map((account) => {
+      let value = account.opening;
+      const points = [{ date: null, value }];
+      S.tx
+        .slice()
+        .sort((left, right) => (left.date < right.date ? -1 : 1))
+        .forEach((entry) => {
+          if (entry.acc === account.id) {
+            value += entry.type === "income" ? entry.amount : entry.type === "expense" ? -entry.amount : -entry.amount;
+            points.push({ date: entry.date, value });
+          } else if (entry.to === account.id) {
+            value += entry.amount;
+            points.push({ date: entry.date, value });
+          }
+        });
+      const usable = points.filter((point) => point.date).slice(-12);
+      return `<section class="card chart-card"><header class="card-head"><div><h3>روند موجودی · ${E(account.name)}</h3><small>از تراکنش‌های واقعی بازسازی شده است</small></div></header>${usable.length > 1 ? DaraCharts.line({ labels: usable.map((point) => shortDate(point.date)), values: usable.map((point) => point.value), format: (value) => faNum(Math.round(value)), ariaLabel: `روند موجودی ${account.name}` }) : DaraCharts.empty("برای این حساب تاریخچهٔ کافی برای نمودار وجود ندارد.")}</section>`;
+    }).join("");
+    return `<div class="top"><h2>حساب‌ها</h2><button class="pri" type="button" onclick="A.acct()">+ حساب جدید</button></div>
+      ${S.accounts.some((account) => (balancesNow[account.id] || 0) < 0) ? `<p class="mm-warning">یک یا چند حساب موجودی منفی دارند؛ نمودار سهم فقط حساب‌های با موجودی نامنفی را نمایش می‌دهد و مبلغ واقعی در جدول دیده می‌شود.</p>` : ""}
+      <div class="kpi-grid"><article class="card kpi-card"><span class="kpi-icon">${navIcon("accounts")}</span><div><small>مجموع موجودی</small><b>${M(total)} ${E(S.cur)}</b></div></article><article class="card kpi-card"><span class="kpi-icon">${navIcon("tx")}</span><div><small>تعداد حساب‌ها</small><b>${faNum(S.accounts.length)}</b></div></article></div>
+      <div class="dash-grid"><section class="card chart-card"><header class="card-head"><div><h3>مقایسهٔ موجودی</h3><small>موجودی فعلی هر حساب</small></div></header>${comparison}</section><section class="card chart-card"><header class="card-head"><div><h3>سهم از موجودی کل</h3><small>ترکیب نقدی</small></div></header>${share}</section></div>
+      <section class="card"><header class="card-head"><div><h3>فهرست حساب‌ها</h3><small>شامل تعداد تراکنش و آخرین فعالیت</small></div></header><div class="table-wrap"><table class="data-table"><thead><tr><th>حساب</th><th>موجودی</th><th>سهم</th><th>تراکنش‌ها</th><th>آخرین فعالیت</th></tr></thead><tbody>${accountRows || '<tr><td colspan="5" class="mu">حسابی ثبت نشده است.</td></tr>'}</tbody></table></div></section>
+      ${histories}`;
+  },
+  reports() {
+    const state = ui.report || (ui.report = { from: per().r.s, to: per().r.e, acc: "", cat: "", compare: false });
+    const filter = (entry, from, to, acc, cat) =>
+      entry.date >= from && entry.date <= to && (!acc || entry.acc === acc || entry.to === acc) && (!cat || entry.cat === cat);
+    const filtered = S.tx.filter((entry) => filter(entry, state.from, state.to, state.acc, state.cat));
+    const summary = totals(filtered);
+    const byCategory = byCat(filtered);
+    const categories = Object.entries(byCategory).sort((left, right) => right[1] - left[1]);
+    const months = [];
+    let cursor = range(state.from).s;
+    while (cursor <= state.to && months.length < 24) {
+      const span = range(cursor);
+      const monthTotals = totals(filtered.filter((entry) => entry.date >= span.s && entry.date <= span.e));
+      months.push({ label: fmn(cursor), ...monthTotals });
+      cursor = addDays(span.e, 1);
+    }
+    const flow = DaraCharts.bar({
+      labels: months.map((month) => month.label),
+      series: [{ name: "درآمد", values: months.map((month) => month.i), color: "var(--g)" }, { name: "هزینه", values: months.map((month) => month.e), color: "var(--r)" }],
+      format: (value) => faNum(Math.round(value)),
+      name: "report-flow",
+      ariaLabel: "گزارش درآمد و هزینه",
+    });
+    const palette = ["#4f6bed", "#0ea5a4", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981", "#f97316", "#64748b"];
+    const donut = categories.length
+      ? DaraCharts.donut({ items: categories.slice(0, 8).map(([id, value], index) => ({ label: cn(id), value, display: M(value), color: palette[index % palette.length], key: id })), title: "هزینه", name: "report-cat" })
+      : DaraCharts.empty("در این بازه هزینه‌ای ثبت نشده است.");
+    const days = Math.max(1, Math.round((new Date(state.to) - new Date(state.from)) / 86_400_000) + 1);
+    let comparison = "";
+    if (state.compare) {
+      const previousTo = addDays(state.from, -1);
+      const previousFrom = addDays(previousTo, -(days - 1));
+      const prior = totals(S.tx.filter((entry) => filter(entry, previousFrom, previousTo, state.acc, state.cat)));
+      comparison = `<section class="card"><header class="card-head"><div><h3>مقایسه با بازهٔ قبل</h3><small>${fd(previousFrom)} تا ${fd(previousTo)}</small></div></header><div class="table-wrap"><table class="data-table"><thead><tr><th>شاخص</th><th>بازهٔ فعلی</th><th>بازهٔ قبل</th><th>تغییر</th></tr></thead><tbody>${[["درآمد", summary.i, prior.i], ["هزینه", summary.e, prior.e], ["خالص", summary.n, prior.n]].map(([label, now, before]) => `<tr><td>${label}</td><td>${M(now)}</td><td>${M(before)}</td><td class="${now - before >= 0 ? "pos" : "neg"}">${before ? `${now - before >= 0 ? "+" : "−"}${M(Math.abs(now - before))}` : "—"}</td></tr>`).join("")}</tbody></table></div></section>`;
+    }
+    const rows = months.map((month) => `<tr><td>${E(month.label)}</td><td class="pos">${M(month.i)}</td><td class="neg">${M(month.e)}</td><td>${M(month.n)}</td></tr>`).join("");
+    const categoryOptions = [["", "همهٔ دسته‌ها"], ...S.cats.map((category) => [category.id, category.name])];
+    const accountOptions = [["", "همهٔ حساب‌ها"], ...S.accounts.map((account) => [account.id, account.name])];
+    return `<div class="top"><h2>گزارش‌های مالی</h2><button class="pri" type="button" onclick="A.reportCsv()">خروجی CSV</button></div>
+      <section class="card"><div class="flt">
+        <label>از تاریخ<input type="date" value="${state.from}" onchange="ui.report.from=this.value;R()"></label>
+        <label>تا تاریخ<input type="date" value="${state.to}" onchange="ui.report.to=this.value;R()"></label>
+        <label>حساب<select onchange="ui.report.acc=this.value;R()">${accountOptions.map(([value, label]) => `<option value="${value}"${state.acc === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <label>دسته<select onchange="ui.report.cat=this.value;R()">${categoryOptions.map(([value, label]) => `<option value="${value}"${state.cat === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <label class="phase5-check"><input type="checkbox"${state.compare ? " checked" : ""} onchange="ui.report.compare=this.checked;R()"> مقایسه با بازهٔ قبل</label>
+      </div></section>
+      <div class="kpi-grid"><article class="card kpi-card"><span class="kpi-icon">${navIcon("net")}</span><div><small>درآمد بازه</small><b class="pos">${M(summary.i)}</b></div></article><article class="card kpi-card"><span class="kpi-icon">${navIcon("tx")}</span><div><small>هزینهٔ بازه</small><b class="neg">${M(summary.e)}</b></div></article><article class="card kpi-card"><span class="kpi-icon">${navIcon("goals")}</span><div><small>جریان نقدی خالص</small><b>${M(summary.n)}</b></div></article><article class="card kpi-card"><span class="kpi-icon">${navIcon("reports")}</span><div><small>تعداد تراکنش</small><b>${faNum(filtered.length)}</b></div></article></div>
+      <div class="dash-grid"><section class="card chart-card wide"><header class="card-head"><div><h3>درآمد و هزینه در بازه</h3><small>${fd(state.from)} تا ${fd(state.to)}</small></div></header>${flow}</section><section class="card chart-card"><header class="card-head"><div><h3>تفکیک هزینه</h3><small>بر اساس دسته‌بندی</small></div></header>${donut}</section></div>
+      ${comparison}
+      <section class="card"><header class="card-head"><div><h3>خلاصهٔ ماهانه</h3><small>جمع درآمد، هزینه و خالص هر ماه</small></div></header>${rows ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>ماه</th><th>درآمد</th><th>هزینه</th><th>خالص</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="mu">در این بازه داده‌ای وجود ندارد.</p>'}</section>`;
   },
   assets() {
     return window.DaraAssetsUI.renderAssets(S);
@@ -1919,32 +2329,62 @@ const answer = (q) => {
   }
   return "فعلاً این سؤال‌ها را پشتیبانی می‌کنم: بیشترین هزینه، بودجه‌های فراتر از سقف، سهم ماهانه هدف و اثر یک خرید بر موجودی پایان ماه.";
 };
-const NAV = [
-  ["dash", "داشبورد"],
-  ["tx", "تراکنش‌ها"],
-  ["bud", "بودجه‌ها"],
-  ["goals", "اهداف"],
-  ["assets", "دارایی‌ها"],
-  ["net", "ارزش خالص"],
-  ["portfolio", "سرمایه‌گذاری"],
-  ["markets", "بازارها"],
-  ["blockchain", "بلاک‌چین"],
-  ["journal", "ژورنال معاملات"],
-  ["notifications", "یادآورها"],
-  ["rec", "تکرارشونده"],
-  ["ai", "دستیار"],
-  ["set", "تنظیمات"],
-];
+
 const takeFlash = () => {
   if (!ui.flash) return "";
   const message = ui.flash;
   ui.flash = "";
   return `<div class="flash" role="status">${E(message)}</div>`;
 };
+
+const themeButtonHtml = () =>
+  ui.theme === "dark"
+    ? '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>'
+    : '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/></svg>';
+
+const userLabel = () =>
+  Cloud.status === "in" ? E(Cloud.user.first_name || Cloud.user.username) : "مهمان";
+
+const drawerHtml = () => `<div class="drawer-head">
+  <div class="brand">دارا<small>مدیریت مالی شخصی</small></div>
+  <button class="icon-btn" type="button" onclick="A.toggleNav()" aria-label="بستن منو">✕</button>
+</div>
+<div class="drawer-scroll">
+  ${NAV_GROUPS.map(
+    (group) => `<div class="nav-group"><p class="nav-title">${group.title}</p>${group.items
+      .map(
+        ([key, label]) =>
+          `<button class="nav-item${ui.page === key ? " on" : ""}" type="button" onclick="A.nav('${key}')"${ui.page === key ? ' aria-current="page"' : ""}>${navIcon(key)}<span>${label}</span></button>`,
+      )
+      .join("")}</div>`,
+  ).join("")}
+</div>
+<div class="drawer-foot">
+  <div class="drawer-user"><span class="avatar">${E(userLabel().slice(0, 1))}</span><div><b>${userLabel()}</b><small>${Cloud.status === "in" ? "حساب متصل" : "حالت مهمان"}</small></div></div>
+  <div class="drawer-actions">
+    <button class="btn btn-ghost" type="button" onclick="A.theme()">${themeButtonHtml()}<span>${ui.theme === "dark" ? "حالت روشن" : "حالت تاریک"}</span></button>
+    ${
+      Cloud.status === "in"
+        ? '<button class="btn btn-ghost" type="button" onclick="A.logout()">خروج</button>'
+        : '<button class="btn btn-ghost" type="button" onclick="A.openAccount()">ورود / ساخت حساب</button>'
+    }
+  </div>
+</div>`;
+
+const topbarHtml = () => `<button class="icon-btn menu-btn" type="button" data-menu-button onclick="A.toggleNav()" aria-label="باز کردن منو" aria-expanded="${ui.navOpen}">
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <div class="topbar-title"><small>دارا</small><span class="topbar-title-text">${E(PAGE_TITLES[ui.page] || "داشبورد")}</span></div>
+  <div class="topbar-actions">
+    <button class="btn btn-primary" type="button" onclick="A.tx()">+ تراکنش</button>
+    <button class="icon-btn" type="button" onclick="A.theme()" aria-label="تغییر تم">${themeButtonHtml()}</button>
+    <button class="icon-btn" type="button" onclick="A.nav('set')" aria-label="پروفایل">${navIcon("set")}</button>
+  </div>`;
 function R() {
   window.DARA_IS_AUTHENTICATED = Cloud.status === "in";
   if (Cloud.status !== "in" && Cloud.status !== "guest") {
-    $("nav").innerHTML = "<b>دارا</b>";
+    $("nav").innerHTML = "";
+    $("topbar").hidden = true;
     $("m").innerHTML = authPage();
     enhanceMoneyInputs($("m"));
     return;
@@ -1955,22 +2395,46 @@ function R() {
   window.DARA_CARD = card;
   window.DARA_MONEY = M;
   window.DARA_CATEGORY_NAME = cn;
-  $("nav").innerHTML =
-    "<b>دارا</b>" +
-    NAV.map(
-      (n) =>
-        `<button class="${ui.page === n[0] ? "on" : ""}" onclick="A.nav('${n[0]}')">${n[1]}</button>`,
-    ).join("") +
-    (Cloud.status === "in"
-      ? `<button onclick="A.logout()">خروج (${E(Cloud.user.first_name || Cloud.user.username)})</button>`
-      : '<button onclick="A.openAccount()">ورود / ساخت حساب</button>');
+  document.body.classList.toggle("nav-open", ui.navOpen);
+  const backdrop = $("drawerBackdrop");
+  if (backdrop) backdrop.hidden = !ui.navOpen || window.innerWidth >= 1024;
+  const topbar = $("topbar");
+  if (topbar) {
+    topbar.hidden = false;
+    topbar.innerHTML = topbarHtml();
+  }
+  $("nav").innerHTML = drawerHtml();
   $("m").innerHTML = takeFlash() +
     (Cloud.syncError
       ? `<section class="card" role="alert"><p>همگام‌سازی داده با سرور ناموفق بود: ${E(Cloud.syncError)}</p><button class="b" onclick="A.retryWorkspace()">تلاش دوباره</button></section>`
       : "") + pages[ui.page === "goals" ? "goals" : ui.page]();
   enhanceMoneyInputs($("m"));
 }
+
+document.addEventListener("click", (event) => {
+  const node = event.target.closest?.("[data-chart-key]");
+  if (!node) return;
+  const chart = node.closest("[data-chart-name]");
+  const name = chart ? chart.dataset.chartName : "";
+  const key = node.dataset.chartKey;
+  if (!key) return;
+  if (name === "tx-cat") {
+    ui.fc = key;
+    R();
+  } else if (name === "tx-month") {
+    ui.off = Number(key) || 0;
+    R();
+  } else if (name === "report-cat") {
+    ui.report = ui.report || {};
+    ui.report.cat = key;
+    R();
+  }
+});
 window.DARA_RENDER = R;
+document.getElementById("drawerBackdrop")?.addEventListener("click", () => A.toggleNav());
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && ui.navOpen && window.innerWidth < 1024) A.toggleNav();
+});
 if (new URLSearchParams(location.search).get("preview") === "1") {
   Cloud.status = "guest";
   R();
